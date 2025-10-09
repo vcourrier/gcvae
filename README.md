@@ -6,7 +6,7 @@ This repository contains a PyTorch implementation of the Guided Clustering Varia
 ## Project Structure
 
 The project is organized into a modular structure to separate concerns like data loading, model architecture, and training logic.
-
+```
 gcvae/
 ├── configs/
 │   └── svhn_mnist_config.yaml
@@ -21,6 +21,7 @@ gcvae/
 ├── .gitignore
 ├── requirements.txt
 └── train.py
+```
 
 ## Setup and Installation
 
@@ -29,13 +30,14 @@ Follow these steps to set up the project environment.
 **1. Clone the repository:**
 ```bash
 git clone <your-repository-url>
-cd vaegmm_project
+```
 
 **2. Install dependencies:**
 ```bash
 pip install -r requirements.txt
+```
 
-**2. Prepare the data:**
+**3. Prepare the data:**
 The script will automatically download the MNIST and SVHN datasets into the directory specified in your configuration file. Ensure the path is correct.
 
 ## How to Run
@@ -48,19 +50,20 @@ Modify the parameters in configs/svhn_mnist_config.yaml to suit your needs.
 Execute the following command from the root directory of the project:
 ```bash
 python train.py --config configs/svhn_mnist_config.yaml
+```
 
 ## Code Components
-train.py: The main executable script to run an experiment.
+- train.py: The main executable script to run an experiment.
 
-configs/: Contains YAML files for configuring experiments.
+- configs/: Contains YAML files for configuring experiments.
 
-src/mnist_data_loader.py: Handles data loading and preprocessing of the mnist-SVHN dataset.
+- src/mnist_data_loader.py: Handles data loading and preprocessing of the mnist-SVHN dataset.
 
-src/models.py: Defines the VAE_GMM neural network architecture.
+- src/models.py: Defines the VAE_GMM neural network architecture.
 
-src/trainer.py: Contains the pretrain and train loops and the loss functions.
+- src/trainer.py: Contains the pretrain and train loops and the loss functions.
 
-src/utils.py: Includes helper functions for metrics (ARI), GMM assignment, and seeding.
+- src/utils.py: Includes helper functions for metrics (ARI), GMM assignment, and seeding.
 
-results/: The default directory where trained models, plots, and other artifacts are saved. Each experiment will create a sub-folder named after the experiment_name in the config.
+- results/: The default directory where trained models, plots, and other artifacts are saved. Each experiment will create a sub-folder named after the experiment_name in the config.
 
