@@ -100,8 +100,6 @@ def load_svhn_mnist(data_path, train_batches = 450, val_batches = 90, test_batch
     test_data_y = torch.stack(test_data_y_list)
     test_labels = torch.stack(test_labels_list)
 
-    print(train_data_x.shape)
-
     train_dataset = TorchTensorDataset(train_data_x, train_data_y, train_labels)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
     val_dataset = TorchTensorDataset(val_data_x, val_data_y, val_labels)
@@ -109,4 +107,3 @@ def load_svhn_mnist(data_path, train_batches = 450, val_batches = 90, test_batch
     test_dataset = TorchTensorDataset(test_data_x, test_data_y, test_labels)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
     return train_loader, val_loader, test_loader
-

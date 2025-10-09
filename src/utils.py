@@ -1,7 +1,5 @@
 import numpy as np
-import pandas as pd
 import torch
-from sklearn import metrics
 from sklearn.metrics.cluster import adjusted_rand_score
 import random
 
