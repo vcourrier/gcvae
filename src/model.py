@@ -77,5 +77,3 @@ class VAE_GMM(nn.Module):
                 nn.init.xavier_normal_(layer.weight)
                 if layer.bias is not None:
                     nn.init.constant_(layer.bias, 0)
-
-
