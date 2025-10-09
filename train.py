@@ -31,7 +31,6 @@ def initialize_gmm_parameters(model, train_loader, n_clusters, device):
     log_sigma_c = torch.log(torch.sqrt(variances_c))
     pi_c_logits = torch.log(torch.tensor(gmm.weights_, dtype=torch.float32, device=device))
     
-    
     print("GMM initialized successfully.")
     return nn.Parameter(mu_c, requires_grad=True), \
            nn.Parameter(log_sigma_c, requires_grad=True), \
@@ -116,14 +115,14 @@ def main(config_path):
     print("Pre-training finished and model saved.")
 
     # --- 5. GMM INITIALIZATION ---
-    mu_c, log_var_c, pi_c_logits = initialize_gmm_parameters(
+    mu_c, log_sigma_c, pi_c_logits = initialize_gmm_parameters(
         model, train_loader, config['model']['n_clusters'], device
     )
 
     # --- 6. FULL TRAINING PHASE ---
     print("\n--- Starting Full Training Phase ---")
     optimizer_nn = torch.optim.Adam(model.parameters(), lr=config['training']['lr_nn'])
-    optimizer_gmm = torch.optim.Adam([mu_c, log_var_c, pi_c_logits], lr=config['training']['lr_gmm'])
+    optimizer_gmm = torch.optim.Adam([mu_c, log_sigma_c, pi_c_logits], lr=config['training']['lr_gmm'])
 
     loss_metrics = train_fn(
         model=model,
@@ -134,7 +133,7 @@ def main(config_path):
         beta=config['training']['beta'],
         epochs=config['training']['epochs'],
         mu_c=mu_c,
-        log_var_c=log_var_c, # Pass log_var_c directly
+        log_sigma_c=log_sigma_c, 
         pi_c_logits=pi_c_logits,
         reconstruction_loss_fn=recon_loss_fn,
         device=device
