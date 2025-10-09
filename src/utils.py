@@ -5,7 +5,16 @@ import random
 
 
 def set_seed(seed_value=42):
-    """Sets the seed for reproducibility."""
+    """
+    Sets the random seed for reproducibility across multiple libraries.
+
+    This function sets the seed for PyTorch (on CPU and CUDA), NumPy, and
+    Python's built-in random module. It also configures CUDA operations to be
+    deterministic for consistent results.
+
+    Args:
+        seed_value (int): The integer value to use as the seed. Defaults to 42.
+    """
     torch.manual_seed(seed_value)
     torch.cuda.manual_seed(seed_value)
     torch.cuda.manual_seed_all(seed_value)
@@ -16,15 +25,19 @@ def set_seed(seed_value=42):
 
 def assign_clusters_using_gmm(z, pi_c, mu_c, log_sigma_c):
     """
+    Assigns latent vectors to clusters using a vectorized GMM calculation.
 
-    Parameters:
-    - z (torch.Tensor): The latent space vectors. [num_samples, latent_dim]
-    - pi_c (torch.Tensor): The mixing coefficients of the GMM. [n_clusters]
-    - mu_c (torch.Tensor): The means of the GMM. [latent_dim, n_clusters]
-    - sigma_c (torch.Tensor): The variances of the GMM. [latent_dim, n_clusters]
+    Calculates the log-probability of each latent vector `z` belonging to each
+    cluster `c` and assigns the cluster with the highest probability. 
+
+    Args:
+        z (torch.Tensor): The latent space vectors.
+        pi_c (torch.Tensor): The mixing coefficients (priors) of the GMM.
+        mu_c (torch.Tensor): The means of the GMM components.
+        log_sigma_c (torch.Tensor): The log of the standard deviations of the GMM components.
 
     Returns:
-    - cluster_assignments (np.ndarray): The cluster assignments for each data point. [num_samples]
+        np.ndarray: The cluster assignments for each data point.
     """
     batch_size, latent_dim = z.shape
     n_clusters = pi_c.shape[0]
@@ -43,17 +56,23 @@ def assign_clusters_using_gmm(z, pi_c, mu_c, log_sigma_c):
 
 def calculate_percentages(assignment_list, reference_list, num_assignments, num_references, assignment_name):
     """
-    Calculate the percentage of each reference class in each assignment group.
+    Computes the distribution of reference labels for each predicted cluster.
 
-    Parameters:
-    - assignment_list (np.ndarray): The list of assignments for each data point. [num_samples]
-    - reference_list (np.ndarray): The list of reference labels for each data point. [num_samples]
-    - num_assignments (int): The number of unique assignments.
-    - num_references (int): The number of unique reference labels.
-    - assignment_name (str): The name of the assignment type (for logging purposes).
+    Note:
+        This function prints warnings to the console for clusters that are
+        empty or contain fewer than 1000 observations.
+
+    Args:
+        assignment_list (np.ndarray): Predicted cluster assignments.
+        reference_list (np.ndarray): True reference labels.
+        num_assignments (int): The total number of unique clusters.
+        num_references (int): The total number of unique reference labels.
+        assignment_name (str): The name of the assignment type for logging purposes.
 
     Returns:
-    - percentages (np.ndarray): The percentage matrix. [num_assignments, num_references]
+        np.ndarray: A matrix where `percentages[i, j]` is the percentage of
+            items in cluster `i` that have a true label of `j`.
+            Shape is [num_assignments, num_references].
     """
     percentages = np.zeros((num_assignments, num_references))
     for assignment in range(num_assignments):
@@ -71,14 +90,14 @@ def calculate_percentages(assignment_list, reference_list, num_assignments, num_
 
 def adjusted_rand_index(Y_pred, Y):
     """
-    Compute the Adjusted Rand Index (ARI).
+    Compute the Adjusted Rand Index (ARI) between two sets of cluster assignments.
 
-    Parameters:
-    - Y_pred (torch.Tensor): The predicted cluster assignments. [num_samples]
-    - Y (torch.Tensor): The true cluster assignments. [num_samples]
+    Args:
+        Y_pred (torch.Tensor): The predicted cluster assignments.
+        Y (torch.Tensor): The true cluster assignments.
 
     Returns:
-    - float: The Adjusted Rand Index.
+        float: The Adjusted Rand Index, a value between -1 and 1.
     """
     assert Y_pred.shape == Y.shape
     
@@ -92,5 +111,20 @@ def adjusted_rand_index(Y_pred, Y):
     return ari
 
 def color_blue(val):
+    """
+    Creates a CSS style string to color a cell background blue based on its value.
+
+    This function is intended for use with the `Styler.applymap` or `Styler.map`
+    methods in a pandas DataFrame to create a heatmap-like visualization.
+    It assumes the input value is a percentage from 0 to 100.
+
+    Args:
+        val (float): The cell value, expected to be in the range [0, 100].
+
+    Returns:
+        str: A CSS 'background-color' style string.
+    """
+    # Clamp the value between 0 and 100 for safety
+    val = max(0, min(100, val))
     blue_intensity = int(255 * ((val / 100)))  #+((100-val)/1000)))  # Scale the value to 0-255
     return f'background-color: rgb(0,0,{blue_intensity})'

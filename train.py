@@ -7,7 +7,7 @@ import os
 
 # Import from your new package structure
 from src.mnist_data_loader import load_svhn_mnist
-from src.model import VAE_GMM, View
+from src.model import GCVAE, View
 from src.trainer import pretrain_fn, train_fn
 from src.utils import set_seed
 
@@ -90,7 +90,7 @@ def main(config_path):
     decoder_layers.append(View((-1, *y_shape)))
     decoder = nn.Sequential(*decoder_layers)
 
-    model = VAE_GMM(encoder, decoder, mean_layer, log_var_layer).to(device)
+    model = GCVAE(encoder, decoder, mean_layer, log_var_layer).to(device)
     model.init_parameters()
     print("Model built and initialized successfully.")
 

@@ -7,7 +7,7 @@ def get_q_c_x(pi_c, mean_c, log_var_c, z, epsilon=1e-5):
     """
     Compute the posterior distribution of the cluster given the latent space vector, i.e. q(c|x).
 
-    Arguments:
+    Args:
     - pi_c (torch.Tensor): The mixing coefficients of the GMM. [n_clusters]
     - mean_c (torch.Tensor): The means of the GMM. [latent_dim, n_clusters]
     - log_var_c (torch.Tensor): The logarithm of the variance of the GMM. [latent_dim, n_clusters]
@@ -45,18 +45,30 @@ def get_q_c_x(pi_c, mean_c, log_var_c, z, epsilon=1e-5):
 def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma_c, \
          epsilon=1e-10, continuous = True, reconstruction_loss_fn=None, beta = 1, weights_y=[0.5,0.5]):
     """
-    Compute the loss of the model.
+    Compute the loss of the GCAVE model.
 
-    Parameters:
-    - y (torch.Tensor): The true output data. [batch_size, output_dim]
-    - y_decoded (torch.Tensor): The estimated output data. [batch_size, output_dim]
-    - z (torch.Tensor): The latent space vector. [batch_size, latent_dim]
-    - mean_encoder (torch.Tensor): The mean of the encoder distribution. [batch_size, latent_dim]
-    - log_var_encoder (torch.Tensor): The logarithm of the variance of the encoder distribution. [batch_size, latent_dim]
-    - pi_c (torch.Tensor): The mixing coefficients of the GMM. [n_clusters]
-    - mean_c (torch.Tensor): The means of the GMM. [latent_dim, n_clusters]
-    - log_var_c (torch.Tensor): The logarithm of the variance of the GMM. [latent_dim, n_clusters]
-    - epsilon (float): A small value to ensure numerical stability.
+    Args:
+        y (torch.Tensor): The ground truth target data.
+        y_decoded (torch.Tensor): The reconstructed data from the decoder.
+        z (torch.Tensor): The latent vectors.
+        mean_encoder (torch.Tensor): The mean of the encoder's distribution q(z|x).
+        log_var_encoder (torch.Tensor): The log variance of the encoder's distribution q(z|x).
+        pi_c (torch.Tensor): The mixing coefficients of the GMM.
+        mean_c (torch.Tensor): The means of the GMM components.
+        log_sigma_c (torch.Tensor): The log standard deviation of the GMM components.
+        epsilon (float): A small constant for numerical stability.
+        continuous (bool): Flag indicating if the output `y` is continuous or categorical.
+        reconstruction_loss_fn (callable, optional): The loss function for the
+            reconstruction term. Defaults to L1Loss.
+        beta (float): The weight for the KL divergence term.
+        weights_y (list, optional): Class weights for the CrossEntropyLoss if `continuous`
+            is False.
+
+    Returns:
+        tuple[torch.Tensor, float, float]: A tuple containing:
+            - The mean ELBO loss for the batch.
+            - The mean reconstruction loss component.
+            - The mean KL divergence component.
     """
     batch_size = z.shape[0]
     n_clusters = pi_c.shape[0]
@@ -88,9 +100,6 @@ def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma
         reconstruction_loss_fn = nn.L1Loss(reduction='none')
 
     if continuous is True :
-        #if y.ndim == 1:
-        #    y = y.view(-1, 1) # [batch_size, 1]
-        #term1_y = reconstruction_loss_fn(y_decoded, y).sum(dim=1) 
         term1_y = reconstruction_loss_fn(y_decoded, y).view(y.shape[0], -1).sum(dim=1)
     else : 
         if y_decoded.dim() == 1:
@@ -105,11 +114,8 @@ def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma
                     dim=(1, 2))
     
     term3 = - torch.sum(q_c_x * torch.log(pi_c_expanded), dim=1)
-
     term4 = - 0.5 * torch.sum(1 + log_var_encoder, dim=1)
-
     term5 = torch.sum(q_c_x * torch.log(q_c_x), dim=1)
-
     kl_term = term2 + term3 + term4 + term5
     ELBO = term1_y + beta * kl_term
 
@@ -119,7 +125,18 @@ def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma
 
 def compute_kl(locs_q, log_var_q, locs_p=None, scale_p=None):
     """
-    Computes the KL(q||p)
+    Computes the KL[q||p]
+
+    Args:
+        locs_q (torch.Tensor): The mean of the first distribution, `q`.
+        log_var_q (torch.Tensor): The log variance of the first distribution, `q`.
+        locs_p (torch.Tensor, optional): The mean of the second distribution, `p`.
+            Defaults to a tensor of zeros.
+        scale_p (torch.Tensor, optional): The standard deviation of the second
+            distribution, `p`. Defaults to a tensor of ones.
+
+    Returns:
+        torch.Tensor: The summed KL divergence for each item in the batch.
     """
     var_q = torch.exp(log_var_q)
     scale_q = torch.sqrt(var_q)
@@ -138,9 +155,20 @@ def loss_pretrain_kl(y_decoded, y, mean_tilde, log_var_tilde, reconstruction_los
     """
     Compute the loss of the VAE during pretrain.
 
-    Parameters:
-    - y (torch.Tensor): The true output data. [batch_size, output_dim]
-    - y_decoded (torch.Tensor): The estimated output data. [batch_size, output_dim]
+    Args:
+        y_decoded (torch.Tensor): The reconstructed data from the decoder.
+        y (torch.Tensor): The ground truth target data.
+        mean_tilde (torch.Tensor): The mean of the encoder's distribution q(z|x).
+        log_var_tilde (torch.Tensor): The log variance of the encoder's distribution q(z|x).
+        reconstruction_loss_fn (callable, optional): The loss function for the
+            reconstruction term. Defaults to L1Loss.
+        beta (float): The weight for the KL divergence term.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing:
+            - The ELBO loss for each sample in the batch.
+            - The reconstruction loss component for each sample.
+            - The KL divergence component for each sample.
     """
     if y.dim() == 1:
         y = y.view(-1, 1) # [batch_size, 1]
@@ -148,17 +176,34 @@ def loss_pretrain_kl(y_decoded, y, mean_tilde, log_var_tilde, reconstruction_los
     if reconstruction_loss_fn is None:
         reconstruction_loss_fn = nn.L1Loss(reduction='none')
 
-    #term1_y = nn.MSELoss(reduction='none')(y, y_decoded).view(y.size(0), -1).sum(dim=1) 
     term1_y = reconstruction_loss_fn(y_decoded, y).view(y.size(0), -1).sum(dim=1)
 
     latent_loss = compute_kl(mean_tilde, log_var_tilde, locs_p=None, scale_p=None)
     ELBO_pretrain = term1_y + beta*latent_loss
-    #print("Loss pretrain terms:", "Y:", term1_y.mean().item(), "KL:", latent_loss.mean().item())
     return ELBO_pretrain, term1_y, latent_loss
 
 
 def pretrain_fn(model, train_loader, val_loader, optimizer_nn, beta, pretrain_epoch, reconstruction_loss_fn=None, device='cpu'):
+    """
+    Executes the pre-training loop.
 
+    Args:
+        model (nn.Module): The model to be trained.
+        train_loader (DataLoader): DataLoader for the training data.
+        val_loader (DataLoader): DataLoader for the validation data.
+        optimizer_nn (torch.optim.Optimizer): The optimizer for the model's parameters.
+        beta (float): The weight for the KL divergence term during pre-training.
+        pretrain_epoch (int): The number of epochs for pre-training.
+        reconstruction_loss_fn (callable, optional): The loss function for the
+            reconstruction term. Defaults to L1Loss.
+        device (str or torch.device): The device to run training on (e.g., 'cpu' or 'cuda').
+
+    Returns:
+        tuple[list, list, dict]: A tuple containing:
+            - A list of training loss metrics per epoch.
+            - A list of validation loss metrics per epoch.
+            - The state dictionary of the pre-trained model.
+    """
     pretrain_loss = []
     pretrain_y_loss = []
     pretrain_x_loss = []
@@ -170,29 +215,25 @@ def pretrain_fn(model, train_loader, val_loader, optimizer_nn, beta, pretrain_ep
 
     for e in range(pretrain_epoch):
         model.train()
-        b=0
         running_train_loss = 0.0
         term_y_loss  = 0
         term_kl_loss = 0
         for batch in train_loader:
-            b+=1
-
             data_x_batch = batch[0].to(device)
             data_y_batch = batch[1].to(device)
-            
-            # Forward pass
+
             y_decoded, _, mean_tilde, log_var_tilde = model(data_x_batch)
             loss_value, term_y, term_kl = loss_pretrain_kl(y_decoded, data_y_batch, mean_tilde, log_var_tilde, 
                                                            reconstruction_loss_fn, beta)
             loss_value = loss_value.mean()
-            # Backward pass*
+
             optimizer_nn.zero_grad()
             loss_value.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer_nn.step()
             optimizer_nn.zero_grad()  
 
-            running_train_loss += loss_value.item() * data_x_batch.size(0)  # Accumulate loss
+            running_train_loss += loss_value.item() * data_x_batch.size(0)  
             term_y_loss  += term_y.mean().item()
             term_kl_loss += term_kl.mean().item()
 
@@ -200,16 +241,15 @@ def pretrain_fn(model, train_loader, val_loader, optimizer_nn, beta, pretrain_ep
         pretrain_y_loss.append(term_y_loss / len(train_loader) ) 
         pretrain_kl_loss.append(term_kl_loss / len(train_loader) )
         # Validation phase
-        model.eval()  # Set the model to evaluation mode
+        model.eval()  
         val_loss = 0.0
         val_term_y_loss  = 0
         val_term_kl_loss = 0
-        with torch.no_grad():  # Disable gradient computation
+        with torch.no_grad(): 
             for batch in val_loader:
                 val_x_batch = batch[0].to(device)
                 val_y_batch = batch[1].to(device)
 
-                # Forward pass
                 val_y_decoded, _, val_mean_tilde, val_log_var_tilde = model(val_x_batch)
                 val_loss_value, val_term_y, val_term_kl = loss_pretrain_kl(val_y_decoded, val_y_batch, \
                                                val_mean_tilde, val_log_var_tilde, reconstruction_loss_fn, beta)
@@ -218,11 +258,10 @@ def pretrain_fn(model, train_loader, val_loader, optimizer_nn, beta, pretrain_ep
                 val_term_y_loss  += val_term_y.mean().item()
                 val_term_kl_loss += val_term_kl.mean().item()
 
-        val_loss /= len(val_loader)  # Compute the average validation loss
+        val_loss /= len(val_loader)  
         pretrain_val_loss.append(val_loss)
         pretrain_val_y_loss.append(val_term_y_loss / len(val_loader)  )
         pretrain_val_kl_loss.append(val_term_kl_loss / len(val_loader)  )
-        #print("Epoch: {}/{}, Validation loss: {:.4f}".format(e + 1, pretrain_epoch, val_loss))
 
     pretrained_state = model.state_dict()
     pretrain_losses = [pretrain_loss, pretrain_y_loss, pretrain_x_loss, pretrain_kl_loss]
@@ -231,7 +270,27 @@ def pretrain_fn(model, train_loader, val_loader, optimizer_nn, beta, pretrain_ep
 
 
 def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta, epochs, mu_c, log_sigma_c, pi_c_logits, reconstruction_loss_fn=None, device='cpu'): 
+    """
+    Executes the main training loop.
 
+    Args:
+        model (nn.Module): The GCVAE model.
+        train_loader (DataLoader): DataLoader for the training data.
+        val_loader (DataLoader): DataLoader for the validation data.
+        optimizer_nn (torch.optim.Optimizer): Optimizer for the VAE network parameters.
+        optimizer_gmm (torch.optim.Optimizer): Optimizer for the GMM parameters.
+        beta (float): Weight for the KL divergence term in the loss.
+        epochs (int): The number of epochs for training.
+        mu_c (nn.Parameter): The GMM component means.
+        log_sigma_c (nn.Parameter): The GMM component log standard deviations.
+        pi_c_logits (nn.Parameter): The logits for the GMM mixing coefficients.
+        reconstruction_loss_fn (callable, optional): Loss function for reconstruction.
+        device (str or torch.device): The device to run training on.
+
+    Returns:
+        dict: A dictionary containing lists of training and validation loss
+            metrics for each epoch.
+    """
     loss_metrics = {
         'train_loss': [],
         'train_y_loss'  : [],
@@ -242,7 +301,6 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
     }
 
     for e in range(epochs):
-        b=0
         model.train() 
         train_loss = 0
         term_y_loss  = 0
@@ -252,24 +310,20 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
             data_y_batch = batch[1].to(device)
 
             pi_c = F.softmax(pi_c_logits, dim=0) 
-            # Forward pass
             y_decoded, z, mean, log_var = model(data_x_batch)
             loss_value, term_y, term_kl = loss(data_y_batch, y_decoded, z, mean, log_var, \
                               pi_c, mu_c, log_sigma_c, reconstruction_loss_fn=reconstruction_loss_fn, beta=beta)
 
             loss_value = loss_value.mean()
 
-            # Check for NaNs in loss
             if torch.isnan(loss_value):
                 print("NaN detected in loss")
                 break
 
-            # Backward pass
             optimizer_nn.zero_grad()
             optimizer_gmm.zero_grad()
             loss_value.backward()
 
-            # Check for NaNs in gradients
             if torch.isnan(pi_c_logits.grad).any():
                 print("NaN detected in gradients")
                 break
@@ -284,7 +338,6 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
             term_y_loss  += term_y
             term_kl_loss += term_kl
 
-
         train_loss /= len(train_loader)  
         term_y_loss /= len(train_loader)  
         term_kl_loss /= len(train_loader)  
@@ -292,13 +345,12 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
         loss_metrics['train_y_loss'].append(term_y_loss)
         loss_metrics['train_kl_loss'].append(term_kl_loss)
 
-
         # Validation phase
-        model.eval()  # Set the model to evaluation mode
+        model.eval()  
         val_loss = 0.0
         val_term_y_loss  = 0
         val_term_kl_loss = 0
-        with torch.no_grad():  # Disable gradient computation
+        with torch.no_grad():  
             for batch in val_loader:
                 val_x_batch = batch[0].to(device)
                 val_y_batch = batch[1].to(device)
@@ -311,7 +363,7 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
                 val_term_y_loss  += val_term_y
                 val_term_kl_loss += val_term_kl
 
-        val_loss /= len(val_loader)  # Compute the average validation loss
+        val_loss /= len(val_loader) 
         val_term_y_loss  /= len(val_loader)  
         val_term_kl_loss /= len(val_loader)  
 
@@ -324,6 +376,22 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
     return loss_metrics
 
 def reinitialize_gmm(mu_c_pretrained, sigma_c_pretrained, pi_c_pretrained, device):
+    """
+    Converts pre-trained GMM parameters into trainable `nn.Parameter` tensors.
+
+    Args:
+        mu_c_pretrained (torch.Tensor): The pre-trained component means.
+        sigma_c_pretrained (torch.Tensor): The pre-trained component variances.
+        pi_c_pretrained (torch.Tensor): The pre-trained mixing coefficients.
+        device (str or torch.device): The device to move the new parameters to.
+
+    Returns:
+        tuple[nn.Parameter, nn.Parameter, nn.Parameter]: A tuple containing the
+            trainable GMM parameters:
+            - mu_c: Component means.
+            - log_sigma_c: Component log standard deviations.
+            - pi_c_logits: Logits for the mixing coefficients.
+    """
     mu_c = nn.Parameter(mu_c_pretrained.clone(), requires_grad=True).to(device)
     log_sigma_c = nn.Parameter(torch.log(torch.sqrt(sigma_c_pretrained).clone()), requires_grad=True).to(device)
     pi_c_logits = nn.Parameter(torch.log(pi_c_pretrained.clone()), requires_grad=True).to(device)

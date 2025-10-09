@@ -11,6 +11,21 @@ class convert_tensor:
         return image
 
 def load_data_from_path(path, batch_size=10000, shuffle=True):
+    """
+    Loads and pairs MNIST and SVHN datasets based on pre-defined indices.
+
+    Args:
+        path (str): The root directory where the datasets and index files
+            ('.pt' files) are located.
+        batch_size (int): The batch size for the initial, temporary loading of
+            the raw datasets.
+        shuffle (bool): Whether to shuffle the initial raw datasets.
+
+    Returns:
+        tuple[TorchnetTensorDataset, TorchnetTensorDataset]: A tuple containing:
+            - The combined and paired training dataset.
+            - The combined and paired testing dataset.
+    """
     # Use the custom transform
     custom_transform = convert_tensor()
 
@@ -42,6 +57,23 @@ def load_data_from_path(path, batch_size=10000, shuffle=True):
 
 
 def load_svhn_mnist(data_path, train_batches = 450, val_batches = 90, test_batches = 150, batch_size=10000, shuffle=True):
+    """
+    Loads, preprocesses, and splits paired SVHN-MNIST data into DataLoaders.
+
+    Args:
+        data_path (str): The root directory for the dataset files.
+        train_batches (int): The number of batches to use for the training set.
+        val_batches (int): The number of batches to use for the validation set.
+        test_batches (int): The number of batches to use for the test set.
+        batch_size (int): The final batch size for the returned DataLoaders.
+        shuffle (bool): Whether to shuffle the data in the returned DataLoaders.
+
+    Returns:
+        tuple[DataLoader, DataLoader, DataLoader]: A tuple containing:
+            - train_loader: DataLoader for the training set.
+            - val_loader: DataLoader for the validation set.
+            - test_loader: DataLoader for the test set.
+    """
     train_mnist_svhn, test_mnist_svhn = load_data_from_path(data_path, batch_size, shuffle=shuffle)
     mega_train_loader = DataLoader(train_mnist_svhn, batch_size=batch_size, shuffle=shuffle)
     mega_test_loader = DataLoader(test_mnist_svhn, batch_size=batch_size, shuffle=shuffle)
