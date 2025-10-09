@@ -29,7 +29,7 @@ Follow these steps to set up the project environment.
 
 **1. Clone the repository:**
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/vcourrier/gcvae.git
 ```
 
 **2. Install dependencies:**
