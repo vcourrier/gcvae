@@ -81,7 +81,7 @@ def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma
     # Assign to only one cluster but stay differentiable
     TEMPERATURE = 0.1
     logits = torch.log(q_c_x + 1e-9)
-    sharp_differentiable_q = F.gumbel_softmax(logits, tau=TEMPERATURE, hard=True)
+    sharp_differentiable_q = F.gumbel_softmax(logits, tau=TEMPERATURE, hard=False)
     q_c_x = sharp_differentiable_q
 
     # Ensure numerical stability
