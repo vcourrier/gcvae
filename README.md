@@ -59,7 +59,7 @@ python train.py --config configs/svhn_mnist_config.yaml
 
 - src/mnist_data_loader.py: Handles data loading and preprocessing of the mnist-SVHN dataset.
 
-- src/models.py: Defines the VAE_GMM neural network architecture.
+- src/models.py: Defines the GCVAE architecture.
 
 - src/trainer.py: Contains the pretrain and train loops and the loss functions.
 
