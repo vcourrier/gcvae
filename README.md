@@ -65,6 +65,7 @@ gcvae/
 ├── gcvae/            # the package
 ├── tests/
 ├── train.py          # MNIST-SVHN experiment
+├── examples/         # applications of the package
 ├── evaluate.py       # MNIST-SVHN evaluation (metrics.json)
 ├── search.py         # label-free hyperparameter search (MNIST-SVHN)
 ├── pyproject.toml
@@ -88,6 +89,19 @@ The network weights (`final_model.pth`) and the mixture parameters (`gmm_params.
 python evaluate.py --config configs/svhn_mnist_config.yaml
 ```
 It rebuilds the same data split, assigns the validation and test images to clusters, and writes `results/<experiment_name>/metrics.json`: the label-free metrics (η² of the guide, cluster sizes) and, since MNIST-SVHN has digit labels, the ARI and the clustering accuracy (Hungarian matching of clusters to digits). The thesis reports 62.1 % test accuracy with this configuration.
+
+## Examples, notebooks and private data
+
+`examples/` holds applications of the package, each with its own small utils module (see `examples/README.md`). Data that must stay private goes in `data/private/`, which git ignores.
+
+Notebook outputs must never be committed, because they can print rows of private data. After cloning, run once:
+
+```bash
+pip install nbstripout
+nbstripout --install
+```
+
+Git then strips the outputs of every `.ipynb` file when it is added (`.gitattributes` already declares the filter, but each clone has to install it).
 
 ## Hyperparameter selection without labels
 
