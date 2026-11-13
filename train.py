@@ -57,7 +57,10 @@ def main(config_path):
     train_loader, val_loader, test_loader = load_svhn_mnist(
         data_path=config['data']['path'],
         batch_size=config['data']['batch_size'],
-        shuffle=config['data']['shuffle']
+        shuffle=config['data']['shuffle'],
+        train_batches=config['data'].get('train_batches', 450),
+        val_batches=config['data'].get('val_batches', 90),
+        test_batches=config['data'].get('test_batches', 150)
     )
     
     # --- 3. MODEL BUILDING ---

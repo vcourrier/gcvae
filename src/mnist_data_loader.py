@@ -30,12 +30,12 @@ def load_data_from_path(path, batch_size=10000, shuffle=True):
     custom_transform = convert_tensor()
 
     # Load MNIST datasets with the custom transform
-    t1 = DataLoader(datasets.MNIST(path, train=True, download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
-    s1 = DataLoader(datasets.MNIST(path, train=False, download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    t1 = DataLoader(datasets.MNIST(path, train=True, download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    s1 = DataLoader(datasets.MNIST(path, train=False, download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
 
     # Load SVHN datasets with the custom transform
-    t2 = DataLoader(datasets.SVHN(path, split='train', download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
-    s2 = DataLoader(datasets.SVHN(path, split='test', download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    t2 = DataLoader(datasets.SVHN(path, split='train', download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    s2 = DataLoader(datasets.SVHN(path, split='test', download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
 
     # Get transformed indices
     t_mnist = torch.load(path + '/train-ms-mnist-idx.pt', weights_only=True)
