@@ -133,15 +133,28 @@ The digit labels are never used for the selection. ARI and accuracy against the 
 If you use this code, please cite:
 
 ```bibtex
-@phdthesis{courrier2026guided,
+@misc{courrier2026guided,
+  author        = {Courrier, Violaine and Biernacki, Christophe},
+  title         = {From Unsupervised to Guided Clustering: A Variational Implementation},
+  year          = {2026},
+  eprint        = {2604.05513},
+  archivePrefix = {arXiv},
+  primaryClass  = {stat.ME},
+  doi           = {10.48550/arXiv.2604.05513},
+  url           = {https://arxiv.org/abs/2604.05513}
+}
+```
+
+The model and the label-free hyperparameter selection are also described in the PhD thesis:
+
+```bibtex
+@phdthesis{courrier2026thesis,
   author = {Courrier, Violaine},
   title  = {Exploring a General Guided Clustering Principle and its Deep Generative Implementations for Static and Switching Clusters},
   school = {Universit{\'e} de Lille},
   year   = {2026}
 }
 ```
-
-The journal article presenting GCVAE is under review at the *Journal of Classification*. Its reference will be added here once it is published.
 
 ## License
 
