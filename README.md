@@ -15,7 +15,7 @@ pip install -e ".[mnist]"
 ```
 
 The core package needs only `numpy`, `pandas`, `scikit-learn`, `scipy` and `torch`. The optional extras are:
-- `mnist`: `torchvision` and `PyYAML`, for the MNIST-SVHN scripts (`train.py`, `search.py`);
+- `mnist`: `torchvision` and `PyYAML`, for the MNIST-SVHN scripts (`train.py`, `evaluate.py`, `search.py`);
 - `search`: `optuna`, for Bayesian hyperparameter searches;
 - `examples`: `matplotlib`;
 - `dev`: `pytest` and `nbstripout`.
@@ -65,6 +65,7 @@ gcvae/
 ├── gcvae/            # the package
 ├── tests/
 ├── train.py          # MNIST-SVHN experiment
+├── evaluate.py       # MNIST-SVHN evaluation (metrics.json)
 ├── search.py         # label-free hyperparameter search (MNIST-SVHN)
 ├── pyproject.toml
 └── requirements.txt
@@ -80,7 +81,13 @@ The input x is an SVHN image, the guide y is the paired MNIST image of the same 
 ```bash
 python train.py --config configs/svhn_mnist_config.yaml
 ```
-The models are saved in `results/<experiment_name>/`.
+The network weights (`final_model.pth`) and the mixture parameters (`gmm_params.pth`) are saved in `results/<experiment_name>/`.
+
+**Evaluation.**
+```bash
+python evaluate.py --config configs/svhn_mnist_config.yaml
+```
+It rebuilds the same data split, assigns the validation and test images to clusters, and writes `results/<experiment_name>/metrics.json`: the label-free metrics (η² of the guide, cluster sizes) and, since MNIST-SVHN has digit labels, the ARI and the clustering accuracy (Hungarian matching of clusters to digits). The thesis reports 62.1 % test accuracy with this configuration.
 
 ## Hyperparameter selection without labels
 

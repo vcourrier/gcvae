@@ -92,6 +92,9 @@ def main(config_path):
         device=device
     )
     torch.save(model.state_dict(), os.path.join(results_dir, 'final_model.pth'))
+    torch.save({'mu_c': mu_c.detach().cpu(), 'log_sigma_c': log_sigma_c.detach().cpu(),
+                'pi_c_logits': pi_c_logits.detach().cpu()},
+               os.path.join(results_dir, 'gmm_params.pth'))
     print("Full training finished and final model saved.")
     
 if __name__ == '__main__':
