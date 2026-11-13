@@ -33,7 +33,7 @@ def _call(args):
     return {"failed": False, **out}
 
 
-def optimize_eta2(train_eval, suggest, n_trials=40, seeds=(1, 2), max_diverged_seeds=1,
+def optimize_eta2(train_eval, suggest, n_trials=40, seeds=(1, 2), diverged_frac=0.4,
                   collapse_floor=0.05, collapse_penalty=1.0, sampler_seed=42,
                   n_startup_trials=10, storage=None, study_name="bo", load_if_exists=True,
                   save_path=None, pool=None, warm_start_trials=None, progress=True):
@@ -47,15 +47,15 @@ def optimize_eta2(train_eval, suggest, n_trials=40, seeds=(1, 2), max_diverged_s
 
     where pi_min is the mean over seeds of the smallest mixing weight: the
     penalty grows linearly once a cluster empties below `collapse_floor`. A
-    trial with more than `max_diverged_seeds` failed seeds scores
+    trial in which a share `diverged_frac` or more of the seeds failed scores
     `-collapse_penalty` (the worst value).
 
     Args:
         train_eval (callable): `(params, seed) -> dict` with at least `eta2`
             (float), `pi_min` (smallest mixing weight at the end of training)
             and `pred` (cluster assignments of the evaluation set, used for the
-            across-seed agreement). Optional keys: `min_cluster_frac` (logged
-            as the minimum over seeds) and `oracle_*` metrics computed with
+            across-seed agreement). Optional keys: `min_cluster_frac` and
+            `n_clusters_used` (logged as the minimum over seeds) and `oracle_*` metrics computed with
             labels (logged as means, never used by the search). Return None,
             `{'failed': True}` or raise to mark a diverged run. With `pool`, it
             must be a module-level function.
@@ -63,7 +63,9 @@ def optimize_eta2(train_eval, suggest, n_trials=40, seeds=(1, 2), max_diverged_s
         n_trials (int): Total number of completed trials of the study. When a
             stored study is resumed, only the missing trials are run.
         seeds (sequence[int]): Seeds trained for every configuration.
-        max_diverged_seeds (int): Number of failed seeds tolerated per trial.
+        diverged_frac (float): A trial is discarded when (failed seeds) / (seeds)
+            >= diverged_frac. The default 0.4 discards 2 failures out of 5,
+            1 out of 2 and 2 out of 3, and tolerates 1 out of 3 to 5.
         collapse_floor (float): pi_min below which the collapse penalty starts.
         collapse_penalty (float): Penalty at pi_min = 0, and score of a discarded trial.
         sampler_seed (int): Seed of the TPE sampler.
@@ -96,8 +98,9 @@ def optimize_eta2(train_eval, suggest, n_trials=40, seeds=(1, 2), max_diverged_s
         n_failed = len(res) - len(ok)
         trial.set_user_attr("n_ok", len(ok))
         trial.set_user_attr("n_failed", n_failed)
-        trial.set_user_attr("diverged", n_failed > max_diverged_seeds)
-        if n_failed > max_diverged_seeds:
+        discarded = n_failed / len(res) >= diverged_frac
+        trial.set_user_attr("diverged", discarded)
+        if discarded:
             trial.set_user_attr("eta2", float("nan"))
             return -collapse_penalty
 
@@ -110,8 +113,9 @@ def optimize_eta2(train_eval, suggest, n_trials=40, seeds=(1, 2), max_diverged_s
         trial.set_user_attr("eta2_std", float(np.nanstd(eta2s, ddof=1)) if len(ok) >= 2 else float("nan"))
         trial.set_user_attr("pi_min", pi_min)
         trial.set_user_attr("agreement", agreement([r["pred"] for r in ok]))
-        if all("min_cluster_frac" in r for r in ok):
-            trial.set_user_attr("min_cluster_frac", float(min(r["min_cluster_frac"] for r in ok)))
+        for key in ("min_cluster_frac", "n_clusters_used"):
+            if all(key in r for r in ok):
+                trial.set_user_attr(key, float(min(r[key] for r in ok)))
         for key in sorted({k for r in ok for k in r if k.startswith("oracle_")}):
             trial.set_user_attr(key, float(np.nanmean([r.get(key, np.nan) for r in ok])))
         return eta2 - penalty

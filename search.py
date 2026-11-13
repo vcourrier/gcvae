@@ -26,6 +26,7 @@ import argparse
 import copy
 import json
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -129,7 +130,7 @@ class MnistRuns:
             print(f"    {cell_name(cfg)} seed {seed}: already trained", flush=True)
         if row['diverged']:
             return None
-        out = {k: row[k] for k in ('eta2', 'pi_min', 'min_cluster_frac')}
+        out = {k: row[k] for k in ('eta2', 'pi_min', 'min_cluster_frac', 'n_clusters_used')}
         out.update({k: row[k] for k in row if k.startswith('oracle_')})
         out['pred'] = np.load(self.pred_path(cfg, seed))
         return out
@@ -199,7 +200,7 @@ def main(config_path):
 
     _, trials = optimize_eta2(
         runs, make_suggest(search['space']), n_trials=bo.get('n_trials', 40), seeds=search['seeds'],
-        max_diverged_seeds=bo.get('max_diverged_seeds', 1),
+        diverged_frac=bo.get('diverged_frac', 0.4),
         collapse_floor=bo.get('collapse_floor', 0.05), collapse_penalty=bo.get('collapse_penalty', 1.0),
         sampler_seed=bo.get('sampler_seed', 42), n_startup_trials=bo.get('n_startup_trials', 10),
         storage=os.path.join(out_dir, 'study.log'), study_name=search['search_name'],
@@ -208,12 +209,24 @@ def main(config_path):
     print("\nTrials (oracle_* columns use labels and are NOT used for search or selection):")
     print(trials.round(4).to_string(index=False))
 
-    row, shortlist = select(trials, top_k=sel.get('top_k', 5), tol=sel.get('tol'),
-                            min_cluster_frac=sel.get('min_cluster_frac'))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        row, shortlist = select(trials, top_k=sel.get('top_k', 5), tol=sel.get('tol'),
+                                min_cluster_frac=sel.get('min_cluster_frac'))
+    # Make a bad selection visible: it is reported, never hidden or filtered out.
+    alerts = [str(w.message) for w in caught]
+    K = base['model']['n_clusters']
+    if row.get('n_clusters_used', K) < K:
+        alerts.append(f"the selected configuration uses only {int(row['n_clusters_used'])} of the "
+                      f"{K} clusters on at least one seed")
+    if row.get('pi_min', 1.0) < bo.get('collapse_floor', 0.05):
+        alerts.append(f"the smallest mixing weight of the selected configuration is "
+                      f"{row['pi_min']:.3f}, below the collapse floor {bo.get('collapse_floor', 0.05)}")
     chosen = {k: row[k].item() if hasattr(row[k], 'item') else row[k] for k in KEY}
-    cols = ['trial'] + KEY + ['eta2', 'agreement', 'n_ok']
+    cols = ['trial'] + KEY + ['eta2', 'agreement', 'n_ok', 'n_clusters_used', 'pi_min']
     result = {'selected': chosen, 'trial': int(row['trial']),
               'eta2': float(row['eta2']), 'agreement': float(row['agreement']),
+              'warnings': alerts,
               'shortlist': shortlist[cols].to_dict(orient='records'),
               'optimization': bo, 'selection_rule': sel}
     with open(os.path.join(out_dir, 'selected.json'), 'w') as f:
@@ -222,6 +235,8 @@ def main(config_path):
     print(shortlist[cols].round(4).to_string(index=False))
     print(f"\nSelected configuration: {chosen} "
           f"(eta2 = {row['eta2']:.4f}, agreement = {row['agreement']:.4f})")
+    for a in alerts:
+        print(f"WARNING: {a}")
 
 
 if __name__ == '__main__':

@@ -114,7 +114,7 @@ GCVAE is meant for data without labels, so its hyperparameters (latent size, net
 
 The procedure:
 1. A Bayesian optimisation (Optuna TPE, `gcvae.optimization.optimize_eta2`) proposes configurations, trains each with a few seeds, and maximises the mean η² over the seeds, minus a penalty when a cluster empties.
-2. A configuration whose seeds diverge too often (by default 2 of 5) is discarded.
+2. A configuration whose seeds diverge too often is discarded: by default when 40 % or more of its seeds diverge (2 of 5).
 3. Among the trials, keep a shortlist of the most relevant by η² (about 5).
 4. Within the shortlist, select the configuration whose seeds agree most (`gcvae.selection.select`).
 5. The order matters: never combine the two signals into one score, and never rank by agreement first (a configuration can reproducibly find a partition unrelated to y). If a few labels are available, prefer them for the final choice.
@@ -130,7 +130,7 @@ The search YAML gives the base config, the search space, the seeds, the optimisa
 - `study.log`: the Optuna study; relaunching the command resumes it up to `n_trials`;
 - `runs.csv`: one row per configuration and seed (a run already there is never retrained);
 - `trials.csv`: one row per trial, with η², its standard deviation over seeds, the agreement, the smallest mixing weight and the number of non-diverged seeds;
-- `selected.json`: the selected configuration and the shortlist.
+- `selected.json`: the selected configuration, the shortlist, and `warnings` if the selected result is bad: η² = 0 (the clusters explain nothing of the guide), fewer than K clusters used, or a nearly empty cluster. These warnings are also printed; a bad result is reported, never filtered out.
 
 The digit labels are never used for the search or the selection. ARI and accuracy against the labels are only logged, in the `oracle_*` columns, to check the procedure.
 

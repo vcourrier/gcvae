@@ -34,6 +34,15 @@ def test_two_of_five_diverged_is_discarded():
     assert row["x"] <= 0.8
 
 
+@pytest.mark.parametrize("n_seeds, n_failed, discarded",
+                         [(5, 1, False), (5, 2, True), (3, 1, False), (3, 2, True), (2, 1, True)])
+def test_diverged_fraction_rule(n_seeds, n_failed, discarded):
+    def train_eval(params, seed):
+        return None if seed <= n_failed else {"eta2": 0.4, "pi_min": 0.3, "pred": np.zeros(10)}
+    _, df = optimize_eta2(train_eval, suggest, n_trials=1, seeds=range(1, n_seeds + 1), progress=False)
+    assert bool(df["diverged"].iloc[0]) == discarded
+
+
 def test_one_of_five_diverged_is_tolerated():
     def train_eval(params, seed):
         return None if seed == 1 else {"eta2": 0.4, "pi_min": 0.3, "pred": np.zeros(10)}

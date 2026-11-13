@@ -29,9 +29,9 @@ optimization:
   n_trials: 40              # total number of trials of the study
   n_startup_trials: 10      # random trials before TPE starts modelling
   sampler_seed: 42
-  # A trial is discarded (worst score) if more than this many seeds diverged:
-  # 1 of 5 is tolerated, 2 of 5 discards it.
-  max_diverged_seeds: 1
+  # A trial is discarded (worst score) when (diverged seeds) / (seeds) >= this
+  # share, whatever the number of seeds: 2 of 5 discards, 1 of 5 is tolerated.
+  diverged_frac: 0.4
   # Penalty when the smallest mixing weight falls below collapse_floor (linear,
   # equal to collapse_penalty when a cluster is empty).
   collapse_floor: 0.05

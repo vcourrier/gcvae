@@ -67,3 +67,11 @@ def test_select_falls_back_to_eta2_without_agreement():
     with pytest.warns(UserWarning):
         row, _ = select(table)
     assert row["eta2"] == 0.5
+
+
+def test_select_warns_when_eta2_is_zero():
+    # a collapsed configuration: one cluster, perfect agreement, eta2 = 0
+    table = pd.DataFrame({"eta2": [0.0, 0.001], "agreement": [1.0, 0.0]})
+    with pytest.warns(UserWarning, match="eta2 = 0"):
+        row, _ = select(table)
+    assert row["eta2"] == 0.0   # reported, not hidden

@@ -78,6 +78,10 @@ def select(table, top_k=5, tol=None, min_cluster_frac=None):
        for the whole shortlist (fewer than 2 seeds), fall back to the highest
        eta^2 with a warning.
 
+    A warning is also raised when the selected configuration has eta^2 = 0: its
+    clusters explain none of the guide variance (e.g. all observations in one
+    cluster, which agree perfectly across seeds). That is always a bad result.
+
     Other columns (e.g. ARI against labels) are never read.
 
     Args:
@@ -115,4 +119,8 @@ def select(table, top_k=5, tol=None, min_cluster_frac=None):
         row = shortlist.iloc[0]
     else:
         row = shortlist.loc[shortlist["agreement"].idxmax()]
+    if row["eta2"] <= 1e-12:
+        warnings.warn("the selected configuration has eta2 = 0: its clusters explain none "
+                      "of the guide variance. This is a bad result; train more "
+                      "configurations or check the training.")
     return row, shortlist
