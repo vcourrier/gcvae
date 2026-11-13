@@ -1,20 +1,22 @@
 """Label-free hyperparameter search for GCVAE on MNIST-SVHN.
 
-For each configuration of the grid and each seed: pretrain, initialise the GMM,
-train, then assign the validation set to clusters. Per run, the guide-explained
-variance eta^2 (validation guide y, assigned clusters) and the cluster sizes
-are recorded. Per configuration, the agreement is the mean pairwise ARI between
-the seeds' validation assignments. The selection (gcvae.selection.select) keeps
-the configurations whose seeds did not diverge, shortlists the most relevant by
-eta^2 and picks the most reproducible inside the shortlist.
+Bayesian optimisation (gcvae.optimization.optimize_eta2, Optuna TPE) proposes
+configurations from the search space of the YAML file. Each one is trained once
+per seed (pretrain, GMM initialisation, training) and its validation set is
+assigned to clusters. The optimisation maximises the mean eta^2 of the
+validation guide over the seeds, minus a penalty when a cluster empties; a
+configuration with too many diverged seeds gets the worst score.
 
-The digit labels are never used for the selection. They are only logged in
-`oracle_*` columns, to check the procedure afterwards.
+The final configuration is chosen among the trials by the procedure of the
+thesis (gcvae.selection.select): shortlist the most relevant by eta^2, then pick
+the highest across-seed agreement. The digit labels are never used for the
+search or the selection; they are only logged in `oracle_*` columns.
 
 Outputs, in results/<search_name>/:
-  runs.csv       one row per (configuration, seed); the search resumes from it
-  preds/         validation assignments of each run (for the agreement)
-  summary.csv    one row per configuration
+  study.log      the Optuna journal; the search resumes from it
+  runs.csv       one row per (configuration, seed); runs already there are not retrained
+  preds/         validation assignments of each run
+  trials.csv     one row per trial (hyperparameters, score, eta2, agreement, ...)
   selected.json  the selected configuration and the shortlist
 
 Usage:
@@ -22,7 +24,6 @@ Usage:
 """
 import argparse
 import copy
-import itertools
 import json
 import os
 
@@ -30,13 +31,15 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from sklearn.metrics import adjusted_rand_score
 
 from gcvae.inference import assign
 from gcvae.mnist_data_loader import load_svhn_mnist
 from gcvae.model import build_conv_gcvae
-from gcvae.selection import agreement, eta2, select
+from gcvae.optimization import optimize_eta2
+from gcvae.selection import eta2, select
 from gcvae.trainer import init_gmm_from_latent, pretrain_fn, train_fn
 from gcvae.utils import hungarian_accuracy, resolve_device, set_seed
 
@@ -55,72 +58,131 @@ def cell_name(cfg):
     return f"J{cfg['latent_dim']}_h{cfg['hidden_dim']}_b{cfg['beta']:g}_bp{cfg['beta_pretrain']:g}"
 
 
-def run_one(cfg, seed, base, data, device, preds_dir):
-    """Train one configuration with one seed and evaluate it on the validation split."""
-    train_loader, val_loader, test_loader = data
-    K = base['model']['n_clusters']
-    set_seed(seed)
-    model = build_conv_gcvae(train_loader.dataset.tensors[0].shape[1:],
-                             train_loader.dataset.tensors[1].shape[1:],
-                             latent_dim=cfg['latent_dim'], hidden_dim=[cfg['hidden_dim']]).to(device)
-    recon = nn.BCELoss(reduction='none')
-    _, _, state = pretrain_fn(model, train_loader, val_loader,
-                              torch.optim.Adam(model.parameters(), lr=base['pretraining']['lr']),
-                              beta=cfg['beta_pretrain'], pretrain_epoch=base['pretraining']['epochs'],
-                              reconstruction_loss_fn=recon, device=device)
-    model.load_state_dict(state)
-    mu_c, log_sigma_c, pi_c_logits = init_gmm_from_latent(model, train_loader, K, seed=42, device=device)
-    hist = train_fn(model, train_loader, val_loader,
-                    torch.optim.Adam(model.parameters(), lr=base['training']['lr_nn']),
-                    torch.optim.Adam([mu_c, log_sigma_c, pi_c_logits], lr=base['training']['lr_gmm']),
-                    beta=cfg['beta'], epochs=base['training']['epochs'],
-                    mu_c=mu_c, log_sigma_c=log_sigma_c, pi_c_logits=pi_c_logits,
-                    reconstruction_loss_fn=recon, device=device)
+def make_suggest(space):
+    """Draw one configuration from the search space of the YAML file.
 
-    params = list(model.parameters()) + [mu_c, log_sigma_c, pi_c_logits]
-    diverged = not all(torch.isfinite(p).all() for p in params) \
-        or not np.isfinite(hist['train_loss']).all()
-    row = {**cfg, 'seed': seed, 'diverged': bool(diverged),
-           'final_train_loss': hist['train_loss'][-1], 'final_val_y_loss': hist['val_y_loss'][-1],
-           'final_val_kl_loss': hist['val_kl_loss'][-1]}
-    if diverged:
+    Each entry is {type: categorical, choices: [...]}, {type: int, low, high[, step, log]}
+    or {type: float, low, high[, log]}. Floats are rounded to 4 significant digits,
+    so that run names stay readable and cached runs are found again.
+    """
+    def suggest(trial):
+        cfg = {}
+        for name in KEY:
+            spec = space[name]
+            if spec['type'] == 'categorical':
+                cfg[name] = trial.suggest_categorical(name, spec['choices'])
+            elif spec['type'] == 'int':
+                cfg[name] = trial.suggest_int(name, spec['low'], spec['high'],
+                                              step=spec.get('step', 1), log=spec.get('log', False))
+            elif spec['type'] == 'float':
+                v = trial.suggest_float(name, spec['low'], spec['high'], log=spec.get('log', False))
+                cfg[name] = float(f"{v:.4g}")
+            else:
+                raise ValueError(f"unknown type {spec['type']!r} for {name}")
+        return cfg
+    return suggest
+
+
+class MnistRuns:
+    """`train_eval(cfg, seed)` for optimize_eta2, with every run cached in runs.csv."""
+
+    def __init__(self, search, base, out_dir):
+        self.search, self.base = search, base
+        self.preds_dir = os.path.join(out_dir, 'preds')
+        self.runs_csv = os.path.join(out_dir, 'runs.csv')
+        os.makedirs(self.preds_dir, exist_ok=True)
+        self.device = resolve_device()
+        self.data = None
+
+    def load_data(self):
+        if self.data is None:
+            # The split and the pairing are drawn once, so all runs see the same samples.
+            set_seed(self.search.get('data_seed', self.base['general']['seed']))
+            d = self.base['data']
+            self.data = load_svhn_mnist(data_path=d['path'], batch_size=d['batch_size'],
+                                        shuffle=d['shuffle'],
+                                        train_batches=d.get('train_batches', 450),
+                                        val_batches=d.get('val_batches', 90),
+                                        test_batches=d.get('test_batches', 150))
+        return self.data
+
+    def pred_path(self, cfg, seed):
+        return os.path.join(self.preds_dir, f"{cell_name(cfg)}_s{seed}_val.npy")
+
+    def cached(self, cfg, seed):
+        if not os.path.exists(self.runs_csv):
+            return None
+        runs = pd.read_csv(self.runs_csv)
+        mask = (runs['seed'] == seed)
+        for k in KEY:
+            mask &= np.isclose(runs[k], cfg[k], rtol=1e-9, atol=0)
+        return runs[mask].iloc[-1].to_dict() if mask.any() else None
+
+    def __call__(self, cfg, seed):
+        row = self.cached(cfg, seed)
+        if row is None:
+            print(f"    {cell_name(cfg)} seed {seed}: training", flush=True)
+            row = self.train(cfg, seed)
+            pd.DataFrame([row]).to_csv(self.runs_csv, mode='a', index=False,
+                                       header=not os.path.exists(self.runs_csv))
+        else:
+            print(f"    {cell_name(cfg)} seed {seed}: already trained", flush=True)
+        if row['diverged']:
+            return None
+        out = {k: row[k] for k in ('eta2', 'pi_min', 'min_cluster_frac')}
+        out.update({k: row[k] for k in row if k.startswith('oracle_')})
+        out['pred'] = np.load(self.pred_path(cfg, seed))
+        return out
+
+    def train(self, cfg, seed):
+        """Train one configuration with one seed and evaluate it on the validation split."""
+        train_loader, val_loader, test_loader = self.load_data()
+        base, device = self.base, self.device
+        K = base['model']['n_clusters']
+        set_seed(seed)
+        model = build_conv_gcvae(train_loader.dataset.tensors[0].shape[1:],
+                                 train_loader.dataset.tensors[1].shape[1:],
+                                 latent_dim=cfg['latent_dim'], hidden_dim=[cfg['hidden_dim']]).to(device)
+        recon = nn.BCELoss(reduction='none')
+        _, _, state = pretrain_fn(model, train_loader, val_loader,
+                                  torch.optim.Adam(model.parameters(), lr=base['pretraining']['lr']),
+                                  beta=cfg['beta_pretrain'], pretrain_epoch=base['pretraining']['epochs'],
+                                  reconstruction_loss_fn=recon, device=device)
+        model.load_state_dict(state)
+        mu_c, log_sigma_c, pi_c_logits = init_gmm_from_latent(model, train_loader, K, seed=42, device=device)
+        hist = train_fn(model, train_loader, val_loader,
+                        torch.optim.Adam(model.parameters(), lr=base['training']['lr_nn']),
+                        torch.optim.Adam([mu_c, log_sigma_c, pi_c_logits], lr=base['training']['lr_gmm']),
+                        beta=cfg['beta'], epochs=base['training']['epochs'],
+                        mu_c=mu_c, log_sigma_c=log_sigma_c, pi_c_logits=pi_c_logits,
+                        reconstruction_loss_fn=recon, device=device)
+
+        params = list(model.parameters()) + [mu_c, log_sigma_c, pi_c_logits]
+        diverged = not all(torch.isfinite(p).all() for p in params) \
+            or not np.isfinite(hist['train_loss']).all()
+        row = {**cfg, 'seed': seed, 'diverged': bool(diverged),
+               'final_train_loss': hist['train_loss'][-1], 'final_val_y_loss': hist['val_y_loss'][-1],
+               'final_val_kl_loss': hist['val_kl_loss'][-1]}
+        if diverged:
+            return row
+
+        x_val, y_val, lab_val = val_loader.dataset.tensors
+        out = assign(model, mu_c, log_sigma_c, pi_c_logits, x_val, device=device)
+        counts = np.bincount(out['c'], minlength=K)
+        np.save(self.pred_path(cfg, seed), out['c'])
+        row.update({'eta2': eta2(y_val.numpy(), out['c']),
+                    'pi_min': float(F.softmax(pi_c_logits.detach(), dim=0).min()),
+                    'min_cluster_frac': float(counts.min() / counts.sum()),
+                    'n_clusters_used': int((counts > 0).sum())})
+
+        # Oracle metrics: labels are logged for checking only, never used to search or select.
+        x_test, _, lab_test = test_loader.dataset.tensors
+        c_test = assign(model, mu_c, log_sigma_c, pi_c_logits, x_test, device=device)['c']
+        row.update({'oracle_val_ari': adjusted_rand_score(lab_val.numpy(), out['c']),
+                    'oracle_val_acc': hungarian_accuracy(lab_val.numpy(), out['c']),
+                    'oracle_test_ari': adjusted_rand_score(lab_test.numpy(), c_test),
+                    'oracle_test_acc': hungarian_accuracy(lab_test.numpy(), c_test)})
         return row
-
-    x_val, y_val, lab_val = val_loader.dataset.tensors
-    out = assign(model, mu_c, log_sigma_c, pi_c_logits, x_val, device=device)
-    counts = np.bincount(out['c'], minlength=K)
-    np.save(os.path.join(preds_dir, f"{cell_name(cfg)}_s{seed}_val.npy"), out['c'])
-    row.update({'eta2': eta2(y_val.numpy(), out['c']),
-                'min_cluster_frac': float(counts.min() / counts.sum()),
-                'n_clusters_used': int((counts > 0).sum())})
-
-    # Oracle metrics: labels are logged for checking only, never used to select.
-    x_test, _, lab_test = test_loader.dataset.tensors
-    c_test = assign(model, mu_c, log_sigma_c, pi_c_logits, x_test, device=device)['c']
-    row.update({'oracle_val_ari': adjusted_rand_score(lab_val.numpy(), out['c']),
-                'oracle_val_acc': hungarian_accuracy(lab_val.numpy(), out['c']),
-                'oracle_test_ari': adjusted_rand_score(lab_test.numpy(), c_test),
-                'oracle_test_acc': hungarian_accuracy(lab_test.numpy(), c_test)})
-    return row
-
-
-def summarize(runs, preds_dir, max_diverged_seeds):
-    """One row per configuration: label-free signals, then oracle means."""
-    rows = []
-    for key, g in runs.groupby(KEY, sort=False):
-        cfg = dict(zip(KEY, key))
-        ok = g[~g['diverged'].astype(bool)]
-        preds = [np.load(os.path.join(preds_dir, f"{cell_name(cfg)}_s{s}_val.npy")) for s in ok['seed']]
-        row = {**cfg, 'n_seeds': len(g), 'n_ok': len(ok),
-               'diverged': len(g) - len(ok) > max_diverged_seeds,
-               'eta2': ok['eta2'].mean() if len(ok) else np.nan,
-               'eta2_sd': ok['eta2'].std() if len(ok) > 1 else np.nan,
-               'agreement': agreement(preds),
-               'min_cluster_frac': ok['min_cluster_frac'].min() if len(ok) else np.nan}
-        for col in ('oracle_val_ari', 'oracle_val_acc', 'oracle_test_ari', 'oracle_test_acc'):
-            row[col] = ok[col].mean() if len(ok) else np.nan
-        rows.append(row)
-    return pd.DataFrame(rows)
 
 
 def main(config_path):
@@ -128,61 +190,36 @@ def main(config_path):
         search = yaml.safe_load(file)
     with open(search['base_config'], 'r') as file:
         base = merge(yaml.safe_load(file), search.get('base_overrides') or {})
-    sel = search.get('selection', {})
-
+    bo, sel = search.get('optimization', {}), search.get('selection', {})
     out_dir = os.path.join('results', search['search_name'])
-    preds_dir = os.path.join(out_dir, 'preds')
-    os.makedirs(preds_dir, exist_ok=True)
-    runs_csv = os.path.join(out_dir, 'runs.csv')
-    device = resolve_device()
+    os.makedirs(out_dir, exist_ok=True)
+    runs = MnistRuns(search, base, out_dir)
+    print(f"Search '{search['search_name']}': {bo.get('n_trials', 40)} trials x "
+          f"{len(search['seeds'])} seeds. Device: {runs.device}", flush=True)
 
-    grid = search['grid']
-    configs = [dict(zip(KEY, v)) for v in itertools.product(*(grid[k] for k in KEY))]
-    jobs = [(cfg, seed) for cfg in configs for seed in search['seeds']]
-    done = set()
-    if os.path.exists(runs_csv):
-        prev = pd.read_csv(runs_csv)
-        done = {(int(r.latent_dim), int(r.hidden_dim), round(r.beta, 10), round(r.beta_pretrain, 10),
-                 int(r.seed)) for r in prev.itertuples()}
-    todo = [(c, s) for c, s in jobs if (c['latent_dim'], c['hidden_dim'], round(c['beta'], 10),
-                                        round(c['beta_pretrain'], 10), s) not in done]
-    print(f"Search '{search['search_name']}': {len(configs)} configurations x "
-          f"{len(search['seeds'])} seeds = {len(jobs)} runs, {len(jobs) - len(todo)} already done. "
-          f"Device: {device}")
+    _, trials = optimize_eta2(
+        runs, make_suggest(search['space']), n_trials=bo.get('n_trials', 40), seeds=search['seeds'],
+        max_diverged_seeds=bo.get('max_diverged_seeds', 1),
+        collapse_floor=bo.get('collapse_floor', 0.05), collapse_penalty=bo.get('collapse_penalty', 1.0),
+        sampler_seed=bo.get('sampler_seed', 42), n_startup_trials=bo.get('n_startup_trials', 10),
+        storage=os.path.join(out_dir, 'study.log'), study_name=search['search_name'],
+        save_path=os.path.join(out_dir, 'trials.csv'))
 
-    if todo:
-        # The split and the pairing are drawn once, so all runs see the same samples.
-        set_seed(search.get('data_seed', base['general']['seed']))
-        d = base['data']
-        data = load_svhn_mnist(data_path=d['path'], batch_size=d['batch_size'], shuffle=d['shuffle'],
-                               train_batches=d.get('train_batches', 450),
-                               val_batches=d.get('val_batches', 90),
-                               test_batches=d.get('test_batches', 150))
-        for i, (cfg, seed) in enumerate(todo, 1):
-            print(f"\n[{i}/{len(todo)}] {cell_name(cfg)} seed={seed}")
-            row = run_one(cfg, seed, base, data, device, preds_dir)
-            pd.DataFrame([row]).to_csv(runs_csv, mode='a', index=False,
-                                       header=not os.path.exists(runs_csv))
+    print("\nTrials (oracle_* columns use labels and are NOT used for search or selection):")
+    print(trials.round(4).to_string(index=False))
 
-    runs = pd.read_csv(runs_csv)
-    runs = runs[[tuple(r) in {tuple(c[k] for k in KEY) for c in configs}
-                 for r in runs[KEY].itertuples(index=False)]]
-    summary = summarize(runs, preds_dir, sel.get('max_diverged_seeds', 0))
-    summary.to_csv(os.path.join(out_dir, 'summary.csv'), index=False)
-    print("\nPer-configuration summary (oracle_* columns use labels and are NOT used for selection):")
-    print(summary.round(4).to_string(index=False))
-
-    row, shortlist = select(summary, top_k=sel.get('top_k', 5), tol=sel.get('tol'),
+    row, shortlist = select(trials, top_k=sel.get('top_k', 5), tol=sel.get('tol'),
                             min_cluster_frac=sel.get('min_cluster_frac'))
     chosen = {k: row[k].item() if hasattr(row[k], 'item') else row[k] for k in KEY}
-    result = {'selected': chosen,
+    cols = ['trial'] + KEY + ['eta2', 'agreement', 'n_ok']
+    result = {'selected': chosen, 'trial': int(row['trial']),
               'eta2': float(row['eta2']), 'agreement': float(row['agreement']),
-              'shortlist': shortlist[KEY + ['eta2', 'agreement', 'n_ok']].to_dict(orient='records'),
-              'selection_rule': sel}
+              'shortlist': shortlist[cols].to_dict(orient='records'),
+              'optimization': bo, 'selection_rule': sel}
     with open(os.path.join(out_dir, 'selected.json'), 'w') as f:
         json.dump(result, f, indent=2, default=float)
     print("\nShortlist (by eta2):")
-    print(shortlist[KEY + ['eta2', 'agreement', 'n_ok']].round(4).to_string(index=False))
+    print(shortlist[cols].round(4).to_string(index=False))
     print(f"\nSelected configuration: {chosen} "
           f"(eta2 = {row['eta2']:.4f}, agreement = {row['agreement']:.4f})")
 

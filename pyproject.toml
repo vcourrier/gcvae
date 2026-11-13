@@ -22,7 +22,7 @@ dependencies = [
 # MNIST-SVHN experiment: data loader, train.py, search.py, evaluate.py
 mnist = ["torchvision>=0.15", "PyYAML>=6.0"]
 # Bayesian hyperparameter search (e.g. Optuna), as in the examples
-search = ["optuna>=3.0"]
+search = ["optuna>=4.0"]
 # Plots in the examples
 examples = ["matplotlib>=3.7"]
 dev = ["pytest>=7", "nbstripout>=0.6"]

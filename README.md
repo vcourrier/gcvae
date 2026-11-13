@@ -57,6 +57,7 @@ Note on `continuous_output`: despite its name, it only adds a sigmoid on the dec
 | `gcvae.trainer` | `pretrain_fn`, `train_fn` (β constant or a function of the epoch), `linear_annealing`, `init_gmm_from_latent`, the loss and `get_q_c_x` |
 | `gcvae.inference` | `encode` (latent means), `assign` (z, q(c\|x), cluster) |
 | `gcvae.selection` | `eta2`, `agreement`, `select`: label-free hyperparameter selection |
+| `gcvae.optimization` | `optimize_eta2`: Bayesian optimisation of η² (needs the `search` extra) |
 | `gcvae.utils` | `set_seed`, `resolve_device`, `ResilientPool` (process pool that survives a worker crash), `hungarian_accuracy` (oracle metric) |
 | `gcvae.mnist_data_loader` | paired MNIST-SVHN data (needs the `mnist` extra) |
 
@@ -69,7 +70,7 @@ gcvae/
 ├── train.py          # MNIST-SVHN experiment
 ├── examples/         # applications of the package
 ├── evaluate.py       # MNIST-SVHN evaluation (metrics.json)
-├── search.py         # label-free hyperparameter search (MNIST-SVHN)
+├── search.py         # label-free hyperparameter search, Bayesian optimisation (MNIST-SVHN)
 ├── pyproject.toml
 └── requirements.txt
 ```
@@ -107,26 +108,31 @@ Git then strips the outputs of every `.ipynb` file when it is added (`.gitattrib
 
 ## Hyperparameter selection without labels
 
-GCVAE is meant for data without labels, so its hyperparameters (latent size, network widths, β) cannot be tuned on a clustering score. The thesis (Chapter 5, "ranking by relevance, then selecting the most reproducible") recommends:
+GCVAE is meant for data without labels, so its hyperparameters (latent size, network widths, β) cannot be tuned on a clustering score. The thesis (Chapter 5, "ranking by relevance, then selecting the most reproducible") uses two label-free signals:
+- relevance: η², the share of the guide variance explained by the clusters, η² = Σ_c n_c ‖ȳ_c − ȳ‖² / Σ_i ‖y_i − ȳ‖²;
+- reproducibility: the agreement, the mean pairwise ARI between the cluster assignments of independently seeded runs.
 
-1. Train a few seeds (e.g. 3) of every candidate configuration, and discard the configurations whose seeds diverge.
-2. Relevance: compute η², the share of the guide variance explained by the clusters, η² = Σ_c n_c ‖ȳ_c − ȳ‖² / Σ_i ‖y_i − ȳ‖².
-3. Keep a shortlist of the most relevant configurations (about 5) by η².
-4. Reproducibility: within the shortlist, select the configuration whose seeds agree most (mean pairwise ARI between their cluster assignments).
+The procedure:
+1. A Bayesian optimisation (Optuna TPE, `gcvae.optimization.optimize_eta2`) proposes configurations, trains each with a few seeds, and maximises the mean η² over the seeds, minus a penalty when a cluster empties.
+2. A configuration whose seeds diverge too often (by default 2 of 5) is discarded.
+3. Among the trials, keep a shortlist of the most relevant by η² (about 5).
+4. Within the shortlist, select the configuration whose seeds agree most (`gcvae.selection.select`).
 5. The order matters: never combine the two signals into one score, and never rank by agreement first (a configuration can reproducibly find a partition unrelated to y). If a few labels are available, prefer them for the final choice.
 
-`gcvae.selection` implements the signals (`eta2`, `agreement`) and the rule (`select`). For MNIST-SVHN, `search.py` runs a grid with it:
+`optimize_eta2` takes your own `train_eval(params, seed)` and `suggest(trial)` functions, so it applies to any data. For MNIST-SVHN, `search.py` runs it:
 
 ```bash
+pip install -e ".[mnist,search]"
 python search.py --config configs/svhn_mnist_search.yaml
 ```
 
-The search YAML gives the base config, the grid, the seeds and the selection rule. Outputs in `results/<search_name>/`:
-- `runs.csv`: one row per configuration and seed (the search resumes from it: runs already there are skipped);
-- `summary.csv`: per configuration, the mean η², the agreement and the number of non-diverged seeds;
+The search YAML gives the base config, the search space, the seeds, the optimisation budget and the selection rule. Outputs in `results/<search_name>/`:
+- `study.log`: the Optuna study; relaunching the command resumes it up to `n_trials`;
+- `runs.csv`: one row per configuration and seed (a run already there is never retrained);
+- `trials.csv`: one row per trial, with η², its standard deviation over seeds, the agreement, the smallest mixing weight and the number of non-diverged seeds;
 - `selected.json`: the selected configuration and the shortlist.
 
-The digit labels are never used for the selection. ARI and accuracy against the labels are only logged, in the `oracle_*` columns, to check the procedure.
+The digit labels are never used for the search or the selection. ARI and accuracy against the labels are only logged, in the `oracle_*` columns, to check the procedure.
 
 ## Citation
 
