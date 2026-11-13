@@ -3,65 +3,83 @@ PyTorch implementation of the GCVAE model.
 
 This repository contains a PyTorch implementation of the Guided Clustering Variational AutoEncoder (GCVAE). GCVAE is a guided clustering model: the clusters are learned without labels, but they are guided by an auxiliary variable y. The encoder maps the input x to a latent variable z with a Gaussian mixture prior (one component per cluster), and the decoder reconstructs the guide y from z. Only y is reconstructed, so the clusters capture the part of x that is relevant to y.
 
-The model is demonstrated on paired MNIST-SVHN data: the input x is an SVHN image, the guide y is the paired MNIST image of the same digit, and the clusters are formed in the latent space (K = 10).
+The repository is a small Python package (`gcvae`) and the MNIST-SVHN experiment of the thesis.
 
 
-## Project Structure
+## Installation
 
-```
-gcvae/
-├── configs/
-│   └── svhn_mnist_config.yaml
-├── data/
-│   └── data_mnist_svhn/
-├── src/
-│   ├── mnist_data_loader.py
-│   ├── model.py
-│   ├── trainer.py
-│   └── utils.py
-├── .gitignore
-├── LICENSE
-├── requirements.txt
-└── train.py
-```
-
-## Setup and Installation
-
-**1. Clone the repository:**
 ```bash
 git clone https://github.com/vcourrier/gcvae.git
 cd gcvae
+pip install -e ".[mnist]"
 ```
 
-**2. Install dependencies:**
-```bash
-pip install -r requirements.txt
+The core package needs only `numpy`, `pandas`, `scikit-learn`, `scipy` and `torch`. The optional extras are:
+- `mnist`: `torchvision` and `PyYAML`, for the MNIST-SVHN scripts (`train.py`);
+- `search`: `optuna`, for Bayesian hyperparameter searches;
+- `examples`: `matplotlib`;
+- `dev`: `pytest` and `nbstripout`.
+
+`requirements.txt` pins the exact versions used for the MNIST-SVHN experiment (`pip install -r requirements.txt && pip install -e . --no-deps`).
+
+Run the tests with `pytest`.
+
+## Using GCVAE on your own data
+
+```python
+import torch, torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+from gcvae import build_mlp_gcvae, pretrain_fn, init_gmm_from_latent, train_fn, linear_annealing, assign
+
+# x: float32 array [n, d]; y: binary guide, float32 array [n, 1]
+loader = DataLoader(TensorDataset(torch.from_numpy(x), torch.from_numpy(y)), batch_size=64, shuffle=True, drop_last=True)
+model = build_mlp_gcvae(x_dim=x.shape[1], y_dim=1, w_e=64, w_d=32, J=8)   # raw output = logit
+recon = nn.BCEWithLogitsLoss(reduction="none")
+pretrain_fn(model, loader, loader, torch.optim.Adam(model.parameters(), lr=1e-3),
+            beta=0.1, pretrain_epoch=10, reconstruction_loss_fn=recon)
+mu_c, log_sigma_c, pi_c_logits = init_gmm_from_latent(model, x, n_clusters=4, seed=0, latent="mean")
+train_fn(model, loader, loader, torch.optim.Adam(model.parameters(), lr=1e-3),
+         torch.optim.Adam([mu_c, log_sigma_c, pi_c_logits], lr=1e-3),
+         beta=linear_annealing(0.1, 20), epochs=50, mu_c=mu_c, log_sigma_c=log_sigma_c,
+         pi_c_logits=pi_c_logits, reconstruction_loss_fn=recon)
+out = assign(model, mu_c, log_sigma_c, pi_c_logits, x)   # out["z"], out["q"] = q(c|x), out["c"]
 ```
 
-**3. Prepare the data:**
-The MNIST files and the MNIST-SVHN pairing indices (`*-ms-*-idx.pt`) are included in `data/data_mnist_svhn/`. The SVHN `.mat` files are stored with [Git LFS](https://git-lfs.com). Either:
-- run `git lfs pull` after cloning to get them from the repository, or
-- do nothing: if the files are missing or are LFS pointer files, `torchvision` detects the wrong checksum and downloads SVHN automatically into the data directory on the first run.
+Note on `continuous_output`: despite its name, it only adds a sigmoid on the decoder output. Use `continuous_output=True` with `nn.BCELoss` for guides in [0, 1] such as images (MNIST-SVHN), and `continuous_output=False` (the default of `build_mlp_gcvae`) with `nn.BCEWithLogitsLoss` for a binary guide, or with an L1/MSE loss for an unbounded guide.
 
-## How to Run
-The training pipeline is controlled by the `train.py` script, which is configured using a YAML file.
+## Package contents
 
-**1. Configure your experiment:**
-Modify the parameters in `configs/svhn_mnist_config.yaml`. The default values are the ones used in the thesis.
+| Module | Contents |
+|---|---|
+| `gcvae.model` | `GCVAE` (optional `logvar_clamp`), `build_conv_gcvae` (MNIST-SVHN), `build_mlp_gcvae` (tabular) |
+| `gcvae.trainer` | `pretrain_fn`, `train_fn` (β constant or a function of the epoch), `linear_annealing`, `init_gmm_from_latent`, the loss and `get_q_c_x` |
+| `gcvae.inference` | `encode` (latent means), `assign` (z, q(c\|x), cluster) |
+| `gcvae.selection` | `eta2`, `agreement`, `select`: label-free hyperparameter selection |
+| `gcvae.utils` | `set_seed`, `resolve_device`, `ResilientPool` (process pool that survives a worker crash) |
+| `gcvae.mnist_data_loader` | paired MNIST-SVHN data (needs the `mnist` extra) |
 
-**2. Run the training script:**
+```
+gcvae/
+├── configs/svhn_mnist_config.yaml
+├── data/data_mnist_svhn/
+├── gcvae/            # the package
+├── tests/
+├── train.py          # MNIST-SVHN experiment
+├── pyproject.toml
+└── requirements.txt
+```
+
+## MNIST-SVHN experiment
+
+The input x is an SVHN image, the guide y is the paired MNIST image of the same digit, and K = 10.
+
+**Data.** The MNIST files and the MNIST-SVHN pairing indices (`*-ms-*-idx.pt`) are included in `data/data_mnist_svhn/`. The SVHN `.mat` files are stored with [Git LFS](https://git-lfs.com). Either run `git lfs pull` after cloning, or do nothing: if the files are missing or are LFS pointer files, `torchvision` detects the wrong checksum and downloads SVHN into the data directory on the first run.
+
+**Training.** The configuration in `configs/svhn_mnist_config.yaml` holds the values used in the thesis.
 ```bash
 python train.py --config configs/svhn_mnist_config.yaml
 ```
-
-## Code Components
-- `train.py`: the main script to run an experiment.
-- `configs/`: YAML files for configuring experiments.
-- `src/mnist_data_loader.py`: data loading and preprocessing of the MNIST-SVHN dataset.
-- `src/model.py`: the GCVAE architecture.
-- `src/trainer.py`: the pretraining and training loops and the loss functions.
-- `src/utils.py`: helper functions for metrics (ARI), GMM assignment and seeding.
-- `results/`: the default output directory. Each experiment creates a sub-folder named after `experiment_name` in the config.
+The models are saved in `results/<experiment_name>/`.
 
 ## Citation
 
