@@ -7,6 +7,7 @@ from functools import lru_cache
 
 import numpy as np
 import torch
+from scipy.optimize import linear_sum_assignment
 from sklearn.metrics.cluster import adjusted_rand_score
 
 
@@ -211,6 +212,25 @@ def adjusted_rand_index(Y_pred, Y):
     ari = adjusted_rand_score(Y_np, Y_pred_np)
     
     return ari
+
+def hungarian_accuracy(labels, c):
+    """Clustering accuracy against labels, after the best one-to-one matching
+    of clusters to labels (Hungarian algorithm). Needs labels: use it as an
+    oracle metric, never for selection.
+
+    Args:
+        labels (array-like): True labels (non-negative integers).
+        c (array-like): Cluster assignments (non-negative integers).
+
+    Returns:
+        float: The accuracy, in [0, 1].
+    """
+    labels, c = np.asarray(labels).astype(int), np.asarray(c).astype(int)
+    n = max(labels.max(), c.max()) + 1
+    cm = np.zeros((n, n), dtype=np.int64)
+    np.add.at(cm, (c, labels), 1)
+    rows, cols = linear_sum_assignment(-cm)
+    return float(cm[rows, cols].sum() / len(labels))
 
 def color_blue(val):
     """

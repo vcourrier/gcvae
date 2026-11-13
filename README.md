@@ -15,7 +15,7 @@ pip install -e ".[mnist]"
 ```
 
 The core package needs only `numpy`, `pandas`, `scikit-learn`, `scipy` and `torch`. The optional extras are:
-- `mnist`: `torchvision` and `PyYAML`, for the MNIST-SVHN scripts (`train.py`);
+- `mnist`: `torchvision` and `PyYAML`, for the MNIST-SVHN scripts (`train.py`, `search.py`);
 - `search`: `optuna`, for Bayesian hyperparameter searches;
 - `examples`: `matplotlib`;
 - `dev`: `pytest` and `nbstripout`.
@@ -55,7 +55,7 @@ Note on `continuous_output`: despite its name, it only adds a sigmoid on the dec
 | `gcvae.trainer` | `pretrain_fn`, `train_fn` (β constant or a function of the epoch), `linear_annealing`, `init_gmm_from_latent`, the loss and `get_q_c_x` |
 | `gcvae.inference` | `encode` (latent means), `assign` (z, q(c\|x), cluster) |
 | `gcvae.selection` | `eta2`, `agreement`, `select`: label-free hyperparameter selection |
-| `gcvae.utils` | `set_seed`, `resolve_device`, `ResilientPool` (process pool that survives a worker crash) |
+| `gcvae.utils` | `set_seed`, `resolve_device`, `ResilientPool` (process pool that survives a worker crash), `hungarian_accuracy` (oracle metric) |
 | `gcvae.mnist_data_loader` | paired MNIST-SVHN data (needs the `mnist` extra) |
 
 ```
@@ -65,6 +65,7 @@ gcvae/
 ├── gcvae/            # the package
 ├── tests/
 ├── train.py          # MNIST-SVHN experiment
+├── search.py         # label-free hyperparameter search (MNIST-SVHN)
 ├── pyproject.toml
 └── requirements.txt
 ```
@@ -80,6 +81,29 @@ The input x is an SVHN image, the guide y is the paired MNIST image of the same 
 python train.py --config configs/svhn_mnist_config.yaml
 ```
 The models are saved in `results/<experiment_name>/`.
+
+## Hyperparameter selection without labels
+
+GCVAE is meant for data without labels, so its hyperparameters (latent size, network widths, β) cannot be tuned on a clustering score. The thesis (Chapter 5, "ranking by relevance, then selecting the most reproducible") recommends:
+
+1. Train a few seeds (e.g. 3) of every candidate configuration, and discard the configurations whose seeds diverge.
+2. Relevance: compute η², the share of the guide variance explained by the clusters, η² = Σ_c n_c ‖ȳ_c − ȳ‖² / Σ_i ‖y_i − ȳ‖².
+3. Keep a shortlist of the most relevant configurations (about 5) by η².
+4. Reproducibility: within the shortlist, select the configuration whose seeds agree most (mean pairwise ARI between their cluster assignments).
+5. The order matters: never combine the two signals into one score, and never rank by agreement first (a configuration can reproducibly find a partition unrelated to y). If a few labels are available, prefer them for the final choice.
+
+`gcvae.selection` implements the signals (`eta2`, `agreement`) and the rule (`select`). For MNIST-SVHN, `search.py` runs a grid with it:
+
+```bash
+python search.py --config configs/svhn_mnist_search.yaml
+```
+
+The search YAML gives the base config, the grid, the seeds and the selection rule. Outputs in `results/<search_name>/`:
+- `runs.csv`: one row per configuration and seed (the search resumes from it: runs already there are skipped);
+- `summary.csv`: per configuration, the mean η², the agreement and the number of non-diverged seeds;
+- `selected.json`: the selected configuration and the shortlist.
+
+The digit labels are never used for the selection. ARI and accuracy against the labels are only logged, in the `oracle_*` columns, to check the procedure.
 
 ## Citation
 

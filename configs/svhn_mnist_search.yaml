@@ -1,0 +1,34 @@
+# Label-free hyperparameter search for MNIST-SVHN (python search.py --config <this file>).
+# Every configuration of the grid is trained once per seed; the selection uses
+# eta^2 and the across-seed agreement on the validation split, never the labels.
+search_name: "svhn_mnist_search"
+
+# Base experiment: data, fixed hyperparameters and epochs. Any value can be
+# replaced with base_overrides (same structure as the base config).
+base_config: "configs/svhn_mnist_config.yaml"
+base_overrides: {}
+
+# The train/val/test split and the MNIST-SVHN pairing are drawn once with this
+# seed, so every run is evaluated on the same samples (64 = train.py seed).
+data_seed: 64
+
+# Grid (all combinations). hidden_dim is the width of the single decoder layer.
+grid:
+  latent_dim: [8, 16, 20, 24]
+  hidden_dim: [128, 256]
+  beta: [0.01, 0.1, 1.0]
+  beta_pretrain: [0.1]
+
+# One run per seed and configuration.
+seeds: [0, 1, 2]
+
+selection:
+  # A configuration is discarded if more than this many of its seeds diverged.
+  max_diverged_seeds: 0
+  # Discard configurations whose smallest cluster holds less than this share of
+  # the validation set (null: no constraint).
+  min_cluster_frac: null
+  # Shortlist: the top_k configurations by eta^2, or, if tol is set, all those
+  # within tol of the best eta^2.
+  top_k: 5
+  tol: null

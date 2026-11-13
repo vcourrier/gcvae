@@ -21,3 +21,10 @@ def test_resilient_pool_maps_and_survives_crash():
         assert pool.map(_square, [1, 2, 3]) == [1, 4, 9]
         assert pool.map(_crash, [1, 2]) == [None, None]
         assert pool.map(_square, [4]) == [16]  # still usable after the crash
+
+
+def test_hungarian_accuracy_is_permutation_invariant():
+    from gcvae.utils import hungarian_accuracy
+    labels = [0, 0, 1, 1, 2, 2]
+    assert hungarian_accuracy(labels, [2, 2, 0, 0, 1, 1]) == 1.0
+    assert hungarian_accuracy(labels, [0, 0, 0, 1, 1, 1]) == 4 / 6
