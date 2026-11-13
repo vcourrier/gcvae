@@ -45,6 +45,8 @@ train_fn(model, loader, loader, torch.optim.Adam(model.parameters(), lr=1e-3),
 out = assign(model, mu_c, log_sigma_c, pi_c_logits, x)   # out["z"], out["q"] = q(c|x), out["c"]
 ```
 
+Inside the KL term of the training loss, the cluster posterior q(c|x) is replaced by a Gumbel-softmax sample (temperature `gumbel_tau=0.1` of `train_fn`), a sharp but differentiable cluster assignment, as described in the thesis (Chapter 3).
+
 Note on `continuous_output`: despite its name, it only adds a sigmoid on the decoder output. Use `continuous_output=True` with `nn.BCELoss` for guides in [0, 1] such as images (MNIST-SVHN), and `continuous_output=False` (the default of `build_mlp_gcvae`) with `nn.BCEWithLogitsLoss` for a binary guide, or with an L1/MSE loss for an unbounded guide.
 
 ## Package contents

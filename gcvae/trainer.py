@@ -44,7 +44,8 @@ def get_q_c_x(pi_c, mean_c, log_var_c, z, epsilon=1e-5):
 
 
 def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma_c, \
-         epsilon=1e-10, continuous = True, reconstruction_loss_fn=None, beta = 1, weights_y=[0.5,0.5]):
+         epsilon=1e-10, continuous = True, reconstruction_loss_fn=None, beta = 1, weights_y=[0.5,0.5],
+         gumbel_tau=0.1):
     """
     Compute the loss of the GCAVE model.
 
@@ -64,6 +65,8 @@ def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma
         beta (float): The weight for the KL divergence term.
         weights_y (list, optional): Class weights for the CrossEntropyLoss if `continuous`
             is False.
+        gumbel_tau (float): Temperature of the Gumbel-softmax sample that replaces
+            q(c|x) in the KL term (sharp but differentiable cluster assignment).
 
     Returns:
         tuple[torch.Tensor, float, float]: A tuple containing:
@@ -80,9 +83,8 @@ def loss(y, y_decoded, z, mean_encoder, log_var_encoder, pi_c, mean_c, log_sigma
     sigma_2_encoder = torch.exp(log_var_encoder) 
 
     # Assign to only one cluster but stay differentiable
-    TEMPERATURE = 0.1
     logits = torch.log(q_c_x + 1e-9)
-    sharp_differentiable_q = F.gumbel_softmax(logits, tau=TEMPERATURE, hard=False)
+    sharp_differentiable_q = F.gumbel_softmax(logits, tau=gumbel_tau, hard=False)
     q_c_x = sharp_differentiable_q
 
     # Ensure numerical stability
@@ -270,7 +272,7 @@ def pretrain_fn(model, train_loader, val_loader, optimizer_nn, beta, pretrain_ep
     return pretrain_losses, pretrain_val_losses, pretrained_state
 
 
-def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta, epochs, mu_c, log_sigma_c, pi_c_logits, reconstruction_loss_fn=None, device='cpu'): 
+def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta, epochs, mu_c, log_sigma_c, pi_c_logits, reconstruction_loss_fn=None, device='cpu', gumbel_tau=0.1): 
     """
     Executes the main training loop.
 
@@ -290,6 +292,8 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
         pi_c_logits (nn.Parameter): The logits for the GMM mixing coefficients.
         reconstruction_loss_fn (callable, optional): Loss function for reconstruction.
         device (str or torch.device): The device to run training on.
+        gumbel_tau (float): Temperature of the Gumbel-softmax sample of q(c|x)
+            used in the KL term (see `loss`).
 
     Returns:
         dict: A dictionary containing lists of training and validation loss
@@ -317,7 +321,8 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
             pi_c = F.softmax(pi_c_logits, dim=0) 
             y_decoded, z, mean, log_var = model(data_x_batch)
             loss_value, term_y, term_kl = loss(data_y_batch, y_decoded, z, mean, log_var, \
-                              pi_c, mu_c, log_sigma_c, reconstruction_loss_fn=reconstruction_loss_fn, beta=current_beta)
+                              pi_c, mu_c, log_sigma_c, reconstruction_loss_fn=reconstruction_loss_fn, beta=current_beta,
+                              gumbel_tau=gumbel_tau)
 
             loss_value = loss_value.mean()
 
@@ -363,7 +368,8 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
                 val_y_decoded,  z_val, mean_val, log_var_val = model(val_x_batch)
                 val_loss_value, val_term_y, val_term_kl = loss(val_y_batch, val_y_decoded, z_val, mean_val, \
                                                log_var_val, pi_c, mu_c, log_sigma_c, epsilon=1e-6,  \
-                                                reconstruction_loss_fn=reconstruction_loss_fn, beta=current_beta)
+                                                reconstruction_loss_fn=reconstruction_loss_fn, beta=current_beta,
+                                                gumbel_tau=gumbel_tau)
                 val_loss += val_loss_value.item()
                 val_term_y_loss  += val_term_y
                 val_term_kl_loss += val_term_kl
