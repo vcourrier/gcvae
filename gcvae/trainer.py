@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as dist
+from sklearn import mixture
 
 def get_q_c_x(pi_c, mean_c, log_var_c, z, epsilon=1e-5):
     """
@@ -279,7 +280,10 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
         val_loader (DataLoader): DataLoader for the validation data.
         optimizer_nn (torch.optim.Optimizer): Optimizer for the VAE network parameters.
         optimizer_gmm (torch.optim.Optimizer): Optimizer for the GMM parameters.
-        beta (float): Weight for the KL divergence term in the loss.
+        beta (float or callable): Weight for the KL divergence term in the loss.
+            Either a float (constant weight) or a function `epoch -> beta` called
+            at the start of each epoch, with epochs counted from 0 (e.g.
+            `linear_annealing(beta_max, n_epochs)`).
         epochs (int): The number of epochs for training.
         mu_c (nn.Parameter): The GMM component means.
         log_sigma_c (nn.Parameter): The GMM component log standard deviations.
@@ -305,6 +309,7 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
         train_loss = 0
         term_y_loss  = 0
         term_kl_loss = 0
+        current_beta = beta(e) if callable(beta) else beta
         for batch in train_loader:
             data_x_batch = batch[0].to(device)
             data_y_batch = batch[1].to(device)
@@ -312,7 +317,7 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
             pi_c = F.softmax(pi_c_logits, dim=0) 
             y_decoded, z, mean, log_var = model(data_x_batch)
             loss_value, term_y, term_kl = loss(data_y_batch, y_decoded, z, mean, log_var, \
-                              pi_c, mu_c, log_sigma_c, reconstruction_loss_fn=reconstruction_loss_fn, beta=beta)
+                              pi_c, mu_c, log_sigma_c, reconstruction_loss_fn=reconstruction_loss_fn, beta=current_beta)
 
             loss_value = loss_value.mean()
 
@@ -358,7 +363,7 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
                 val_y_decoded,  z_val, mean_val, log_var_val = model(val_x_batch)
                 val_loss_value, val_term_y, val_term_kl = loss(val_y_batch, val_y_decoded, z_val, mean_val, \
                                                log_var_val, pi_c, mu_c, log_sigma_c, epsilon=1e-6,  \
-                                                reconstruction_loss_fn=reconstruction_loss_fn, beta=beta)
+                                                reconstruction_loss_fn=reconstruction_loss_fn, beta=current_beta)
                 val_loss += val_loss_value.item()
                 val_term_y_loss  += val_term_y
                 val_term_kl_loss += val_term_kl
@@ -375,24 +380,76 @@ def train_fn(model, train_loader, val_loader, optimizer_nn, optimizer_gmm, beta,
     
     return loss_metrics
 
-def reinitialize_gmm(mu_c_pretrained, sigma_c_pretrained, pi_c_pretrained, device):
-    """
-    Converts pre-trained GMM parameters into trainable `nn.Parameter` tensors.
+def linear_annealing(beta_max, n_epochs):
+    """Linear warm-up of the KL weight, to pass as `beta` to `train_fn`.
+
+    Returns a function `epoch -> beta` equal to `beta_max * epoch / n_epochs`
+    for `epoch < n_epochs` (so 0 at the first epoch), then `beta_max`.
 
     Args:
-        mu_c_pretrained (torch.Tensor): The pre-trained component means.
-        sigma_c_pretrained (torch.Tensor): The pre-trained component variances.
-        pi_c_pretrained (torch.Tensor): The pre-trained mixing coefficients.
-        device (str or torch.device): The device to move the new parameters to.
+        beta_max (float): The final KL weight.
+        n_epochs (int): Number of warm-up epochs. Values below 1 are treated as 1.
 
     Returns:
-        tuple[nn.Parameter, nn.Parameter, nn.Parameter]: A tuple containing the
-            trainable GMM parameters:
-            - mu_c: Component means.
-            - log_sigma_c: Component log standard deviations.
-            - pi_c_logits: Logits for the mixing coefficients.
+        callable: The schedule `epoch -> beta`.
     """
-    mu_c = nn.Parameter(mu_c_pretrained.clone(), requires_grad=True).to(device)
-    log_sigma_c = nn.Parameter(torch.log(torch.sqrt(sigma_c_pretrained).clone()), requires_grad=True).to(device)
-    pi_c_logits = nn.Parameter(torch.log(pi_c_pretrained.clone()), requires_grad=True).to(device)
-    return mu_c, log_sigma_c, pi_c_logits
+    n = max(1, n_epochs)
+    return lambda epoch: min(beta_max, beta_max * epoch / n)
+
+
+def init_gmm_from_latent(model, data, n_clusters, seed=42, reg_covar=1e-6, device='cpu',
+                         latent='sample', batch_size=512):
+    """Initialise the mixture prior by fitting a diagonal GMM on the latent codes.
+
+    Args:
+        model (GCVAE): The (pre-trained) model.
+        data (DataLoader or torch.Tensor or np.ndarray): The inputs x. A
+            DataLoader is iterated once and the first element of each batch is
+            used as x; a tensor or array is split into batches of `batch_size`.
+        n_clusters (int): Number of mixture components K.
+        seed (int): `random_state` of the sklearn GaussianMixture.
+        reg_covar (float): Regularisation added to the GMM variances.
+        device (str or torch.device): Device of the model; the returned
+            parameters are created on it.
+        latent (str): 'sample' fits the GMM on samples z ~ q(z|x) (the
+            MNIST-SVHN setting of the thesis); 'mean' fits it on the encoder
+            means (deterministic).
+        batch_size (int): Batch size used when `data` is a tensor or array.
+
+    Returns:
+        tuple[nn.Parameter, nn.Parameter, nn.Parameter]: Trainable
+            `mu_c` [latent_dim, K], `log_sigma_c` [latent_dim, K] (log standard
+            deviations) and `pi_c_logits` [K].
+    """
+    if latent not in ('sample', 'mean'):
+        raise ValueError(f"latent must be 'sample' or 'mean', got {latent!r}")
+    if isinstance(data, torch.utils.data.DataLoader):
+        batches = (batch[0] for batch in data)
+    else:
+        x = torch.as_tensor(data)
+        batches = (x[i:i + batch_size] for i in range(0, len(x), batch_size))
+
+    model.eval()
+    with torch.no_grad():
+        z_list = []
+        for x_batch in batches:
+            x_batch = x_batch.to(device)
+            if latent == 'sample':
+                _, z, _, _ = model(x_batch)
+            else:
+                z, _ = model.encoder_forward(x_batch)
+            z_list.append(z.reshape(x_batch.shape[0], -1))
+        z_all = torch.cat(z_list, dim=0).cpu().numpy()
+
+    gmm = mixture.GaussianMixture(n_components=n_clusters, covariance_type='diag',
+                                  reg_covar=reg_covar, random_state=seed)
+    gmm.fit(z_all)
+
+    mu_c = torch.tensor(gmm.means_.T, dtype=torch.float32, device=device)
+    variances_c = torch.tensor(gmm.covariances_.T, dtype=torch.float32, device=device)
+    log_sigma_c = torch.log(torch.sqrt(variances_c))
+    pi_c_logits = torch.log(torch.tensor(gmm.weights_, dtype=torch.float32, device=device))
+
+    return nn.Parameter(mu_c, requires_grad=True), \
+           nn.Parameter(log_sigma_c, requires_grad=True), \
+           nn.Parameter(pi_c_logits, requires_grad=True)

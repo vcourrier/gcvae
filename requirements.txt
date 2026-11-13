@@ -1,7 +1,10 @@
+# Exact versions used to reproduce the MNIST-SVHN experiment.
+# Equivalent to: pip install -e ".[mnist]"  (see pyproject.toml)
 numpy==2.3.3
 pandas==2.3.3
-PyYAML==6.0.3
 scikit_learn==1.7.2
+scipy==1.16.2
 torch==2.8.0
-torchnet==0.0.4
+# mnist extra
+PyYAML==6.0.3
 torchvision==0.23.0
