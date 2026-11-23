@@ -29,7 +29,7 @@ Run the tests with `pytest`.
 ```python
 import torch, torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from gcvae import build_mlp_gcvae, pretrain_fn, init_gmm_from_latent, train_fn, linear_annealing, assign
+from gcvae import build_mlp_gcvae, pretrain_fn, init_gmm_from_latent, train_fn, assign
 
 # x: float32 array [n, d]; y: binary guide, float32 array [n, 1]
 loader = DataLoader(TensorDataset(torch.from_numpy(x), torch.from_numpy(y)), batch_size=64, shuffle=True, drop_last=True)
@@ -40,10 +40,12 @@ pretrain_fn(model, loader, loader, torch.optim.Adam(model.parameters(), lr=1e-3)
 mu_c, log_sigma_c, pi_c_logits = init_gmm_from_latent(model, x, n_clusters=4, seed=0, latent="mean")
 train_fn(model, loader, loader, torch.optim.Adam(model.parameters(), lr=1e-3),
          torch.optim.Adam([mu_c, log_sigma_c, pi_c_logits], lr=1e-3),
-         beta=linear_annealing(0.1, 20), epochs=50, mu_c=mu_c, log_sigma_c=log_sigma_c,
+         beta=0.1, epochs=50, mu_c=mu_c, log_sigma_c=log_sigma_c,
          pi_c_logits=pi_c_logits, reconstruction_loss_fn=recon)
 out = assign(model, mu_c, log_sigma_c, pi_c_logits, x)   # out["z"], out["q"] = q(c|x), out["c"]
 ```
+
+**KL weight β: constant or scheduled.** As in the paper, `beta` is a constant weight on the KL term (`beta=0.1` above). `train_fn` also accepts a function of the epoch (counted from 0) instead of a number, which allows a KL warm-up. This is an extension, not used in the paper's experiments. For example, `beta=linear_annealing(0.1, 20)` (from `gcvae`) increases β linearly from 0 to 0.1 over the first 20 epochs, then keeps it at 0.1. Any callable `epoch -> beta` works. `pretrain_fn` takes a constant β only.
 
 Inside the KL term of the training loss, the cluster posterior q(c|x) is replaced by a Gumbel-softmax sample (temperature `gumbel_tau=0.1` of `train_fn`), a sharp but differentiable cluster assignment, as described in the thesis (Chapter 3).
 
