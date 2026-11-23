@@ -1,7 +1,49 @@
 import torch
-from torch.utils.data import TensorDataset as TorchTensorDataset, DataLoader
-from torchnet.dataset import TensorDataset as TorchnetTensorDataset, ResampleDataset
+from torch.utils.data import Dataset, TensorDataset as TorchTensorDataset, DataLoader
 from torchvision import datasets, transforms
+
+
+class ResampleDataset(Dataset):
+    """Dataset whose `idx`-th item is `dataset[sampler(dataset, idx)]`, of length `size`.
+
+    Same behaviour as `torchnet.dataset.ResampleDataset`, which this replaces
+    (torchnet depends on visdom, which no longer installs with recent setuptools).
+    """
+    def __init__(self, dataset, sampler, size):
+        self.dataset = dataset
+        self.sampler = sampler
+        self.size = size
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        if idx >= len(self):
+            raise IndexError('out of range')
+        idx = self.sampler(self.dataset, idx)
+        if idx < 0 or idx >= len(self.dataset):
+            raise IndexError('out of range')
+        return self.dataset[idx]
+
+
+class ZipDataset(Dataset):
+    """Dataset whose `idx`-th item is `[d[idx] for d in datasets]`.
+
+    Same behaviour as `torchnet.dataset.TensorDataset` given a list, which this replaces.
+    """
+    def __init__(self, datasets):
+        assert len(datasets) > 0, "Should have at least one element"
+        for d in datasets:
+            assert len(d) == len(datasets[0]), "All elements must have the same size"
+        self.datasets = datasets
+
+    def __len__(self):
+        return len(self.datasets[0])
+
+    def __getitem__(self, idx):
+        if idx >= len(self):
+            raise IndexError('out of range')
+        return [d[idx] for d in self.datasets]
 
 class convert_tensor:
     def __call__(self, image):
@@ -22,7 +64,7 @@ def load_data_from_path(path, batch_size=10000, shuffle=True):
         shuffle (bool): Whether to shuffle the initial raw datasets.
 
     Returns:
-        tuple[TorchnetTensorDataset, TorchnetTensorDataset]: A tuple containing:
+        tuple[ZipDataset, ZipDataset]: A tuple containing:
             - The combined and paired training dataset.
             - The combined and paired testing dataset.
     """
@@ -30,12 +72,12 @@ def load_data_from_path(path, batch_size=10000, shuffle=True):
     custom_transform = convert_tensor()
 
     # Load MNIST datasets with the custom transform
-    t1 = DataLoader(datasets.MNIST(path, train=True, download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
-    s1 = DataLoader(datasets.MNIST(path, train=False, download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    t1 = DataLoader(datasets.MNIST(path, train=True, download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    s1 = DataLoader(datasets.MNIST(path, train=False, download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
 
     # Load SVHN datasets with the custom transform
-    t2 = DataLoader(datasets.SVHN(path, split='train', download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
-    s2 = DataLoader(datasets.SVHN(path, split='test', download=False, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    t2 = DataLoader(datasets.SVHN(path, split='train', download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
+    s2 = DataLoader(datasets.SVHN(path, split='test', download=True, transform=custom_transform), batch_size=batch_size, shuffle=shuffle)
 
     # Get transformed indices
     t_mnist = torch.load(path + '/train-ms-mnist-idx.pt', weights_only=True)
@@ -44,11 +86,11 @@ def load_data_from_path(path, batch_size=10000, shuffle=True):
     s_svhn = torch.load(path + '/test-ms-svhn-idx.pt', weights_only=True)
 
     # Create resampled datasets
-    train_mnist_svhn = TorchnetTensorDataset([
+    train_mnist_svhn = ZipDataset([
         ResampleDataset(t1.dataset, lambda d, i: t_mnist[i], size=len(t_mnist)),
         ResampleDataset(t2.dataset, lambda d, i: t_svhn[i], size=len(t_svhn))
     ])
-    test_mnist_svhn = TorchnetTensorDataset([
+    test_mnist_svhn = ZipDataset([
         ResampleDataset(s1.dataset, lambda d, i: s_mnist[i], size=len(s_mnist)),
         ResampleDataset(s2.dataset, lambda d, i: s_svhn[i], size=len(s_svhn))
     ])

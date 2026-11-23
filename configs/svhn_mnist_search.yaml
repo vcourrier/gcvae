@@ -1,0 +1,47 @@
+# Label-free hyperparameter search for MNIST-SVHN (python search.py --config <this file>).
+# Bayesian optimisation (Optuna TPE) of the guarded mean eta^2 on the validation
+# split, then selection among the trials by eta^2 shortlist + across-seed
+# agreement. The labels are never used.
+search_name: "svhn_mnist_search"
+
+# Base experiment: data, fixed hyperparameters (learning rates, epochs, batch
+# size). Any value can be replaced with base_overrides (same structure).
+base_config: "configs/svhn_mnist_config.yaml"
+base_overrides: {}
+
+# The train/val/test split and the MNIST-SVHN pairing are drawn once with this
+# seed, so every run is evaluated on the same samples (64 = train.py seed).
+data_seed: 64
+
+# Search space. Types: categorical (choices), int (low, high, step, log),
+# float (low, high, log). hidden_dim is the width of the single decoder layer.
+# The beta ranges are those of the thesis searches.
+space:
+  latent_dim: {type: int, low: 4, high: 40, step: 4}
+  hidden_dim: {type: categorical, choices: [64, 128, 256, 512]}
+  beta: {type: float, low: 0.0005, high: 0.2, log: true}
+  beta_pretrain: {type: float, low: 0.001, high: 0.5, log: true}
+
+# Each configuration is trained once per seed.
+seeds: [1, 2, 3, 4, 5]
+
+optimization:
+  n_trials: 40              # total number of trials of the study
+  n_startup_trials: 10      # random trials before TPE starts modelling
+  sampler_seed: 42
+  # A trial is discarded (worst score) when (diverged seeds) / (seeds) >= this
+  # share, whatever the number of seeds: 2 of 5 discards, 1 of 5 is tolerated.
+  diverged_frac: 0.4
+  # Penalty when the smallest mixing weight falls below collapse_floor (linear,
+  # equal to collapse_penalty when a cluster is empty).
+  collapse_floor: 0.05
+  collapse_penalty: 1.0
+
+selection:
+  # Shortlist: the top_k trials by eta^2, or, if tol is set, all those within
+  # tol of the best eta^2; then the highest agreement inside the shortlist.
+  top_k: 5
+  tol: null
+  # Discard trials whose smallest cluster holds less than this share of the
+  # validation set (null: no constraint).
+  min_cluster_frac: null

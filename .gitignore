@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Experiment outputs
+results/
+save_models/
+
+# Private user data: never commit
+data/private/

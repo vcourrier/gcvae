@@ -1,40 +1,13 @@
 import yaml
 import torch
 import torch.nn as nn
-from sklearn import mixture
 import argparse
 import os
 
-# Import from your new package structure
-from src.mnist_data_loader import load_svhn_mnist
-from src.model import GCVAE, View
-from src.trainer import pretrain_fn, train_fn
-from src.utils import set_seed
-
-
-def initialize_gmm_parameters(model, train_loader, n_clusters, device):
-    """Initializes GMM parameters by fitting on the latent space."""
-    print("Fitting GMM to initialize parameters...")
-    with torch.no_grad():
-        z_list = []
-        for batch in train_loader:
-            x_batch = batch[0].to(device)
-            _, z, _, _ = model(x_batch)
-            z_list.append(z)
-        z_all = torch.cat(z_list, dim=0).cpu().numpy()
-
-    gmm = mixture.GaussianMixture(n_components=n_clusters, covariance_type='diag', random_state=42)
-    gmm.fit(z_all)
-    
-    mu_c = torch.tensor(gmm.means_.T, dtype=torch.float32, device=device)
-    variances_c = torch.tensor(gmm.covariances_.T, dtype=torch.float32, device=device)
-    log_sigma_c = torch.log(torch.sqrt(variances_c))
-    pi_c_logits = torch.log(torch.tensor(gmm.weights_, dtype=torch.float32, device=device))
-    
-    print("GMM initialized successfully.")
-    return nn.Parameter(mu_c, requires_grad=True), \
-           nn.Parameter(log_sigma_c, requires_grad=True), \
-           nn.Parameter(pi_c_logits, requires_grad=True)
+from gcvae.mnist_data_loader import load_svhn_mnist
+from gcvae.model import build_conv_gcvae
+from gcvae.trainer import pretrain_fn, train_fn, init_gmm_from_latent
+from gcvae.utils import set_seed
 
 
 def main(config_path):
@@ -57,41 +30,19 @@ def main(config_path):
     train_loader, val_loader, test_loader = load_svhn_mnist(
         data_path=config['data']['path'],
         batch_size=config['data']['batch_size'],
-        shuffle=config['data']['shuffle']
+        shuffle=config['data']['shuffle'],
+        train_batches=config['data'].get('train_batches', 450),
+        val_batches=config['data'].get('val_batches', 90),
+        test_batches=config['data'].get('test_batches', 150)
     )
     
     # --- 3. MODEL BUILDING ---
     x_shape = train_loader.dataset.tensors[0].shape[1:]
     y_shape = train_loader.dataset.tensors[1].shape[1:]
 
-    x_depth, x_square_dim, _ = x_shape
-    y_depth, y_square_dim, _ = y_shape
-    y_dim = y_square_dim**2
-    
-    latent_dim = config['model']['latent_dim']
-    hidden_dim = config['model']['hidden_dim']
-
-    encoder = nn.Sequential(
-        nn.Conv2d(x_depth, x_square_dim, 4, 2, 1, bias=True), nn.ReLU(True),
-        nn.Conv2d(x_square_dim, x_square_dim * 2, 4, 2, 1, bias=True), nn.ReLU(True),
-        nn.Conv2d(x_square_dim * 2, x_square_dim * 4, 4, 2, 1, bias=True), nn.ReLU(True),
-    )
-
-    mean_layer = nn.Conv2d(x_square_dim * 4, latent_dim, 4, 1, 0, bias=True)
-    log_var_layer = nn.Conv2d(x_square_dim * 4, latent_dim, 4, 1, 0, bias=True)
-
-    decoder_layers = []
-    in_dim = latent_dim
-    for out_dim in reversed(hidden_dim):
-        decoder_layers.append(nn.Linear(in_dim, out_dim))
-        decoder_layers.append(nn.ReLU())
-        in_dim = out_dim
-    decoder_layers.append(nn.Linear(hidden_dim[0], y_dim))
-    decoder_layers.append(View((-1, *y_shape)))
-    decoder = nn.Sequential(*decoder_layers)
-
-    model = GCVAE(encoder, decoder, mean_layer, log_var_layer).to(device)
-    model.init_parameters()
+    model = build_conv_gcvae(x_shape, y_shape,
+                             latent_dim=config['model']['latent_dim'],
+                             hidden_dim=config['model']['hidden_dim']).to(device)
     print("Model built and initialized successfully.")
 
 
@@ -115,9 +66,11 @@ def main(config_path):
     print("Pre-training finished and model saved.")
 
     # --- 5. GMM INITIALIZATION ---
-    mu_c, log_sigma_c, pi_c_logits = initialize_gmm_parameters(
-        model, train_loader, config['model']['n_clusters'], device
+    print("Fitting GMM to initialize parameters...")
+    mu_c, log_sigma_c, pi_c_logits = init_gmm_from_latent(
+        model, train_loader, config['model']['n_clusters'], seed=42, device=device
     )
+    print("GMM initialized successfully.")
 
     # --- 6. FULL TRAINING PHASE ---
     print("\n--- Starting Full Training Phase ---")
@@ -139,6 +92,9 @@ def main(config_path):
         device=device
     )
     torch.save(model.state_dict(), os.path.join(results_dir, 'final_model.pth'))
+    torch.save({'mu_c': mu_c.detach().cpu(), 'log_sigma_c': log_sigma_c.detach().cpu(),
+                'pi_c_logits': pi_c_logits.detach().cpu()},
+               os.path.join(results_dir, 'gmm_params.pth'))
     print("Full training finished and final model saved.")
     
 if __name__ == '__main__':

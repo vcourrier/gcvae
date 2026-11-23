@@ -19,7 +19,7 @@ pretraining:
   beta: 0.1
 
 training:
-  epochs: 100
+  epochs: 50
   lr_nn: 0.0005
   lr_gmm: 0.0005
   beta: 0.1
