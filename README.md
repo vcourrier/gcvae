@@ -91,7 +91,7 @@ The network weights (`final_model.pth`) and the mixture parameters (`gmm_params.
 ```bash
 python evaluate.py --config configs/svhn_mnist_config.yaml
 ```
-It rebuilds the same data split, assigns the validation and test images to clusters, and writes `results/<experiment_name>/metrics.json`: the label-free metrics (η² of the guide, cluster sizes) and, since MNIST-SVHN has digit labels, the ARI and the clustering accuracy (Hungarian matching of clusters to digits). The thesis reports 62.1 % test accuracy with this configuration.
+It rebuilds the same data split, assigns the validation and test images to clusters, and writes `results/<experiment_name>/metrics.json`: the label-free metrics (η² of the guide, cluster sizes) and, since MNIST-SVHN has digit labels, the ARI and the clustering accuracy (Hungarian matching of clusters to digits). The paper reports 62.1 % test accuracy with this configuration, averaged over 10 runs. A single run depends on the seed: expect roughly 60 % to 70 %.
 
 ## Examples, notebooks and private data
 
